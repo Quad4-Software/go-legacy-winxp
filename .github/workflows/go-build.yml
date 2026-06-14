@@ -46,8 +46,8 @@ jobs:
             echo "branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
             echo "Checking out $RELEASE_BRANCH for version $VERSION"
           else
-            echo "branch=main" >> $GITHUB_OUTPUT
-            echo "No release branch found for $MAJOR_MINOR, falling back to main"
+            echo "branch=master" >> $GITHUB_OUTPUT
+            echo "No release branch found for $MAJOR_MINOR, falling back to master"
           fi
 
       - uses: actions/checkout@v4
