@@ -1,0 +1,332 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: go-legacy-winxp <go-legacy-winxp@local>
+Date: Sun, 14 Jun 2026 00:00:00 +0000
+Subject: [PATCH] Add Windows XP support
+
+---
+ src/cmd/link/internal/ld/pe.go                     |  2 +-
+ .../golang.org/x/sys/windows/zsyscall_windows.go | 16 ++++++++
+ src/runtime/netpoll_windows.go                     | 43 ++++++++++++++++------
+ src/runtime/os_windows.go                          | 31 ++++++++++------
+ src/runtime/signal_windows.go                      | 14 +++++++
+ src/syscall/zsyscall_windows.go                    | 16 ++++++++
+ 6 files changed, 98 insertions(+), 24 deletions(-)
+
+diff --git a/src/cmd/link/internal/ld/pe.go b/src/cmd/link/internal/ld/pe.go
+index b49da42c..851f0646 100644
+--- a/src/cmd/link/internal/ld/pe.go
++++ b/src/cmd/link/internal/ld/pe.go
+@@ -152,7 +152,7 @@ const (
+ )
+ 
+ const (
+-	PeMinimumTargetMajorVersion = 6
++	PeMinimumTargetMajorVersion = 5
+ 	PeMinimumTargetMinorVersion = 1
+ )
+ 
+diff --git a/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go b/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
+index f25b7308..96044839 100644
+--- a/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
++++ b/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
+@@ -1759,6 +1759,9 @@ func CancelIo(s Handle) (err error) {
+ }
+ 
+ func CancelIoEx(s Handle, o *Overlapped) (err error) {
++	if err := procCancelIoEx.Find(); err != nil {
++		return CancelIo(s)
++	}
+ 	r1, _, e1 := syscall.SyscallN(procCancelIoEx.Addr(), uintptr(s), uintptr(unsafe.Pointer(o)))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -1966,6 +1969,9 @@ func DeleteFile(path *uint16) (err error) {
+ }
+ 
+ func deleteProcThreadAttributeList(attrlist *ProcThreadAttributeList) {
++	if err := procDeleteProcThreadAttributeList.Find(); err != nil {
++		return
++	}
+ 	syscall.SyscallN(procDeleteProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)))
+ 	return
+ }
+@@ -2779,6 +2785,13 @@ func getWindowsDirectory(dir *uint16, dirLen uint32) (len uint32, err error) {
+ }
+ 
+ func initializeProcThreadAttributeList(attrlist *ProcThreadAttributeList, attrcount uint32, flags uint32, size *uintptr) (err error) {
++	if err := procInitializeProcThreadAttributeList.Find(); err != nil {
++		if attrlist == nil && size != nil {
++			*size = 128
++			return ERROR_INSUFFICIENT_BUFFER
++		}
++		return nil
++	}
+ 	r1, _, e1 := syscall.SyscallN(procInitializeProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)), uintptr(attrcount), uintptr(flags), uintptr(unsafe.Pointer(size)))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -3492,6 +3505,9 @@ func UnmapViewOfFile(addr uintptr) (err error) {
+ }
+ 
+ func updateProcThreadAttribute(attrlist *ProcThreadAttributeList, flags uint32, attr uintptr, value unsafe.Pointer, size uintptr, prevvalue unsafe.Pointer, returnedsize *uintptr) (err error) {
++	if err := procUpdateProcThreadAttribute.Find(); err != nil {
++		return nil
++	}
+ 	r1, _, e1 := syscall.SyscallN(procUpdateProcThreadAttribute.Addr(), uintptr(unsafe.Pointer(attrlist)), uintptr(flags), uintptr(attr), uintptr(value), uintptr(size), uintptr(prevvalue), uintptr(unsafe.Pointer(returnedsize)))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+diff --git a/src/runtime/netpoll_windows.go b/src/runtime/netpoll_windows.go
+index db5d0435..f2c0ef84 100644
+--- a/src/runtime/netpoll_windows.go
++++ b/src/runtime/netpoll_windows.go
+@@ -187,21 +187,42 @@ func netpoll(delay int64) (gList, int32) {
+ 	} else {
+ 		wait = uint32(delay / 1e6)
+ 	}
+-	n := len(entries) / int(gomaxprocs)
+-	if n < 8 {
+-		n = 8
+-	}
+ 	if delay != 0 {
+ 		mp.blocked = true
+ 	}
+-	if stdcall(_GetQueuedCompletionStatusEx, iocphandle, uintptr(unsafe.Pointer(&entries[0])), uintptr(n), uintptr(unsafe.Pointer(&n)), uintptr(wait), 0) == 0 {
+-		mp.blocked = false
+-		errno := getlasterror()
+-		if errno == windows.WAIT_TIMEOUT {
+-			return gList{}, 0
++	n := 0
++	if _GetQueuedCompletionStatusEx != nil {
++		nn := len(entries) / int(gomaxprocs)
++		if nn < 8 {
++			nn = 8
+ 		}
+-		println("runtime: GetQueuedCompletionStatusEx failed (errno=", errno, ")")
+-		throw("runtime: netpoll failed")
++		if stdcall(_GetQueuedCompletionStatusEx, iocphandle, uintptr(unsafe.Pointer(&entries[0])), uintptr(nn), uintptr(unsafe.Pointer(&n)), uintptr(wait), 0) == 0 {
++			mp.blocked = false
++			errno := getlasterror()
++			if errno == windows.WAIT_TIMEOUT {
++				return gList{}, 0
++			}
++			println("runtime: GetQueuedCompletionStatusEx failed (errno=", errno, ")")
++			throw("runtime: netpoll failed")
++		}
++	} else if _GetQueuedCompletionStatus != nil {
++		var bytes uint32
++		var key uintptr
++		var ov *windows.Overlapped
++		if stdcall(_GetQueuedCompletionStatus, iocphandle, uintptr(unsafe.Pointer(&bytes)), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&ov)), uintptr(wait)) == 0 {
++			mp.blocked = false
++			errno := getlasterror()
++			if errno == windows.WAIT_TIMEOUT {
++				return gList{}, 0
++			}
++			println("runtime: GetQueuedCompletionStatus failed (errno=", errno, ")")
++			throw("runtime: netpoll failed")
++		}
++		entries[0] = overlappedEntry{key: key, ov: ov, qty: bytes}
++		n = 1
++	} else {
++		mp.blocked = false
++		throw("runtime: netpoll unsupported on this Windows version")
+ 	}
+ 	mp.blocked = false
+ 	delta := int32(0)
+diff --git a/src/runtime/os_windows.go b/src/runtime/os_windows.go
+index 2c5d22ef..b8ede905 100644
+--- a/src/runtime/os_windows.go
++++ b/src/runtime/os_windows.go
+@@ -24,17 +24,14 @@ const (
+ //go:cgo_import_dynamic runtime._CreateIoCompletionPort CreateIoCompletionPort%4 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._CreateThread CreateThread%6 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._CreateWaitableTimerA CreateWaitableTimerA%3 "kernel32.dll"
+-//go:cgo_import_dynamic runtime._CreateWaitableTimerExW CreateWaitableTimerExW%4 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._DuplicateHandle DuplicateHandle%7 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._ExitProcess ExitProcess%1 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._FreeEnvironmentStringsW FreeEnvironmentStringsW%1 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._GetConsoleMode GetConsoleMode%2 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._GetCurrentThreadId GetCurrentThreadId%0 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._GetEnvironmentStringsW GetEnvironmentStringsW%0 "kernel32.dll"
+-//go:cgo_import_dynamic runtime._GetErrorMode GetErrorMode%0 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._GetProcAddress GetProcAddress%2 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._GetProcessAffinityMask GetProcessAffinityMask%3 "kernel32.dll"
+-//go:cgo_import_dynamic runtime._GetQueuedCompletionStatusEx GetQueuedCompletionStatusEx%6 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._GetStdHandle GetStdHandle%1 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._GetSystemDirectoryA GetSystemDirectoryA%2 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._GetSystemInfo GetSystemInfo%1 "kernel32.dll"
+@@ -45,7 +42,6 @@ const (
+ //go:cgo_import_dynamic runtime._PostQueuedCompletionStatus PostQueuedCompletionStatus%4 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._QueryPerformanceCounter QueryPerformanceCounter%1 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._QueryPerformanceFrequency QueryPerformanceFrequency%1 "kernel32.dll"
+-//go:cgo_import_dynamic runtime._RaiseFailFastException RaiseFailFastException%3 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._ResumeThread ResumeThread%1 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._RtlLookupFunctionEntry RtlLookupFunctionEntry%3 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._RtlVirtualUnwind  RtlVirtualUnwind%8 "kernel32.dll"
+@@ -64,8 +60,6 @@ const (
+ //go:cgo_import_dynamic runtime._VirtualQuery VirtualQuery%3 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._WaitForSingleObject WaitForSingleObject%2 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._WaitForMultipleObjects WaitForMultipleObjects%4 "kernel32.dll"
+-//go:cgo_import_dynamic runtime._WerGetFlags WerGetFlags%2 "kernel32.dll"
+-//go:cgo_import_dynamic runtime._WerSetFlags WerSetFlags%1 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._WriteConsoleW WriteConsoleW%5 "kernel32.dll"
+ //go:cgo_import_dynamic runtime._WriteFile WriteFile%5 "kernel32.dll"
+ 
+@@ -83,17 +77,14 @@ var (
+ 	_CreateIoCompletionPort,
+ 	_CreateThread,
+ 	_CreateWaitableTimerA,
+-	_CreateWaitableTimerExW,
+ 	_DuplicateHandle,
+ 	_ExitProcess,
+ 	_FreeEnvironmentStringsW,
+ 	_GetConsoleMode,
+ 	_GetCurrentThreadId,
+ 	_GetEnvironmentStringsW,
+-	_GetErrorMode,
+ 	_GetProcAddress,
+ 	_GetProcessAffinityMask,
+-	_GetQueuedCompletionStatusEx,
+ 	_GetStdHandle,
+ 	_GetSystemDirectoryA,
+ 	_GetSystemInfo,
+@@ -104,7 +95,6 @@ var (
+ 	_PostQueuedCompletionStatus,
+ 	_QueryPerformanceCounter,
+ 	_QueryPerformanceFrequency,
+-	_RaiseFailFastException,
+ 	_ResumeThread,
+ 	_RtlLookupFunctionEntry,
+ 	_RtlVirtualUnwind,
+@@ -123,10 +113,16 @@ var (
+ 	_VirtualQuery,
+ 	_WaitForSingleObject,
+ 	_WaitForMultipleObjects,
+-	_WerGetFlags,
+-	_WerSetFlags,
+ 	_WriteConsoleW,
+ 	_WriteFile,
++	// Loaded dynamically in loadOptionalSyscalls (missing on Windows XP).
++	_CreateWaitableTimerExW,
++	_GetErrorMode,
++	_GetQueuedCompletionStatus,
++	_GetQueuedCompletionStatusEx,
++	_RaiseFailFastException,
++	_WerGetFlags,
++	_WerSetFlags,
+ 	_ stdFunction
+ 
+ 	// Use RtlGenRandom to generate cryptographically random data.
+@@ -334,6 +330,14 @@ func loadOptionalSyscalls() {
+ 	}
+ 	_RtlGetCurrentPeb = windowsFindfunc(n32, []byte("RtlGetCurrentPeb\000"))
+ 	_RtlGetVersion = windowsFindfunc(n32, []byte("RtlGetVersion\000"))
++
++	_GetErrorMode = windowsFindfunc(k32, []byte("GetErrorMode\000"))
++	_WerGetFlags = windowsFindfunc(k32, []byte("WerGetFlags\000"))
++	_WerSetFlags = windowsFindfunc(k32, []byte("WerSetFlags\000"))
++	_CreateWaitableTimerExW = windowsFindfunc(k32, []byte("CreateWaitableTimerExW\000"))
++	_GetQueuedCompletionStatus = windowsFindfunc(k32, []byte("GetQueuedCompletionStatus\000"))
++	_GetQueuedCompletionStatusEx = windowsFindfunc(k32, []byte("GetQueuedCompletionStatusEx\000"))
++	_RaiseFailFastException = windowsFindfunc(k32, []byte("RaiseFailFastException\000"))
+ }
+ 
+ func monitorSuspendResume() {
+@@ -451,6 +455,9 @@ var haveHighResSleep = false
+ // resolution timer. createHighResTimer returns new timer
+ // handle or 0, if CreateWaitableTimerEx failed.
+ func createHighResTimer() uintptr {
++	if _CreateWaitableTimerExW == nil {
++		return 0
++	}
+ 	// As per @jstarks, see
+ 	// https://github.com/golang/go/issues/8687#issuecomment-656259353
+ 	return stdcall(_CreateWaitableTimerExW, 0, 0,
+diff --git a/src/runtime/signal_windows.go b/src/runtime/signal_windows.go
+index 40547b81..2d235210 100644
+--- a/src/runtime/signal_windows.go
++++ b/src/runtime/signal_windows.go
+@@ -11,9 +11,17 @@ import (
+ )
+ 
+ func preventErrorDialogs() {
++	if _GetErrorMode == nil {
++		stdcall(_SetErrorMode, windows.SEM_FAILCRITICALERRORS|windows.SEM_NOGPFAULTERRORBOX|windows.SEM_NOOPENFILEERRORBOX)
++		return
++	}
+ 	errormode := stdcall(_GetErrorMode)
+ 	stdcall(_SetErrorMode, errormode|windows.SEM_FAILCRITICALERRORS|windows.SEM_NOGPFAULTERRORBOX|windows.SEM_NOOPENFILEERRORBOX)
+ 
++	if _WerGetFlags == nil || _WerSetFlags == nil {
++		return
++	}
++
+ 	// Disable WER fault reporting UI.
+ 	// Do this even if WER is disabled as a whole,
+ 	// as WER might be enabled later with setTraceback("wer")
+@@ -25,6 +33,9 @@ func preventErrorDialogs() {
+ 
+ // enableWER re-enables Windows error reporting without fault reporting UI.
+ func enableWER() {
++	if _GetErrorMode == nil {
++		return
++	}
+ 	// re-enable Windows Error Reporting
+ 	errormode := stdcall(_GetErrorMode)
+ 	if errormode&windows.SEM_NOGPFAULTERRORBOX != 0 {
+@@ -458,6 +469,9 @@ func dieFromException(info *windows.ExceptionRecord, r *windows.Context) {
+ 			}
+ 		}
+ 	}
++	if _RaiseFailFastException == nil {
++		throw("runtime.dieFromException: unhandled exception (XP-compatible fallback)")
++	}
+ 	stdcall(_RaiseFailFastException, uintptr(unsafe.Pointer(info)), uintptr(unsafe.Pointer(r)), windows.FAIL_FAST_GENERATE_EXCEPTION_ADDRESS)
+ }
+ 
+diff --git a/src/syscall/zsyscall_windows.go b/src/syscall/zsyscall_windows.go
+index 7d049c9e..c453eab4 100644
+--- a/src/syscall/zsyscall_windows.go
++++ b/src/syscall/zsyscall_windows.go
+@@ -474,6 +474,9 @@ func CancelIo(s Handle) (err error) {
+ }
+ 
+ func CancelIoEx(s Handle, o *Overlapped) (err error) {
++	if err := procCancelIoEx.Find(); err != nil {
++		return CancelIo(s)
++	}
+ 	r1, _, e1 := SyscallN(procCancelIoEx.Addr(), uintptr(s), uintptr(unsafe.Pointer(o)))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -578,6 +581,9 @@ func DeleteFile(path *uint16) (err error) {
+ }
+ 
+ func deleteProcThreadAttributeList(attrlist *_PROC_THREAD_ATTRIBUTE_LIST) {
++	if err := procDeleteProcThreadAttributeList.Find(); err != nil {
++		return
++	}
+ 	SyscallN(procDeleteProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)))
+ 	return
+ }
+@@ -917,6 +923,13 @@ func GetVersion() (ver uint32, err error) {
+ }
+ 
+ func initializeProcThreadAttributeList(attrlist *_PROC_THREAD_ATTRIBUTE_LIST, attrcount uint32, flags uint32, size *uintptr) (err error) {
++	if err := procInitializeProcThreadAttributeList.Find(); err != nil {
++		if attrlist == nil && size != nil {
++			*size = 128
++			return ERROR_INSUFFICIENT_BUFFER
++		}
++		return nil
++	}
+ 	r1, _, e1 := SyscallN(procInitializeProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)), uintptr(attrcount), uintptr(flags), uintptr(unsafe.Pointer(size)))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -1144,6 +1157,9 @@ func UnmapViewOfFile(addr uintptr) (err error) {
+ }
+ 
+ func updateProcThreadAttribute(attrlist *_PROC_THREAD_ATTRIBUTE_LIST, flags uint32, attr uintptr, value unsafe.Pointer, size uintptr, prevvalue unsafe.Pointer, returnedsize *uintptr) (err error) {
++	if err := procUpdateProcThreadAttribute.Find(); err != nil {
++		return nil
++	}
+ 	r1, _, e1 := SyscallN(procUpdateProcThreadAttribute.Addr(), uintptr(unsafe.Pointer(attrlist)), uintptr(flags), uintptr(attr), uintptr(value), uintptr(size), uintptr(prevvalue), uintptr(unsafe.Pointer(returnedsize)))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
