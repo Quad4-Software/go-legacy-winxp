@@ -429,7 +429,7 @@ func normaliseLinkPath(path string) (string, error) {
 	}
 
 	// \??\Volume{abc}\
-	if winreadlinkvolume.Value() != "0" {
+	if winreadlinkvolume.Value() != "0" || windows.ErrorLoadingGetFinalPathNameByHandle() != nil {
 		return `\\?\` + path[4:], nil
 	}
 	winreadlinkvolume.IncNonDefault()

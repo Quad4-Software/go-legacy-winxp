@@ -325,10 +325,13 @@ var TestDeleteatFallback bool
 // for compatibility with older Windows versions and file systems
 // over performance.
 func deleteatFallback(h syscall.Handle) error {
+	const (
+		fileBasicInformationClass        = 4
+		fileDispositionInformationClass  = 13
+	)
+
 	var data syscall.ByHandleFileInformation
 	if err := syscall.GetFileInformationByHandle(h, &data); err == nil && data.FileAttributes&syscall.FILE_ATTRIBUTE_READONLY != 0 {
-		// Remove read-only attribute. Reopen the file, as it was previously open without FILE_WRITE_ATTRIBUTES access
-		// in order to maximize compatibility in the happy path.
 		wh, err := ReOpenFile(h,
 			FILE_WRITE_ATTRIBUTES,
 			FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
@@ -337,28 +340,34 @@ func deleteatFallback(h syscall.Handle) error {
 		if err != nil {
 			return err
 		}
-		err = SetFileInformationByHandle(
+		err = NtSetInformationFile(
 			wh,
-			FileBasicInfo,
-			unsafe.Pointer(&FILE_BASIC_INFO{
+			&IO_STATUS_BLOCK{},
+			unsafe.Pointer(&fileBasicInformation{
 				FileAttributes: data.FileAttributes &^ FILE_ATTRIBUTE_READONLY,
 			}),
-			uint32(unsafe.Sizeof(FILE_BASIC_INFO{})),
+			uint32(unsafe.Sizeof(fileBasicInformation{})),
+			fileBasicInformationClass,
 		)
 		syscall.CloseHandle(wh)
 		if err != nil {
-			return err
+			return err.(NTStatus).Errno()
 		}
 	}
 
-	return SetFileInformationByHandle(
+	err := NtSetInformationFile(
 		h,
-		FileDispositionInfo,
-		unsafe.Pointer(&FILE_DISPOSITION_INFO{
+		&IO_STATUS_BLOCK{},
+		unsafe.Pointer(&FILE_DISPOSITION_INFORMATION{
 			DeleteFile: true,
 		}),
-		uint32(unsafe.Sizeof(FILE_DISPOSITION_INFO{})),
+		uint32(unsafe.Sizeof(FILE_DISPOSITION_INFORMATION{})),
+		fileDispositionInformationClass,
 	)
+	if err != nil {
+		return err.(NTStatus).Errno()
+	}
+	return nil
 }
 
 func Renameat(olddirfd syscall.Handle, oldpath string, newdirfd syscall.Handle, newpath string) error {

@@ -363,6 +363,9 @@ func GetFileSizeEx(handle syscall.Handle, size *int64) (err error) {
 }
 
 func GetFinalPathNameByHandle(file syscall.Handle, filePath *uint16, filePathSize uint32, flags uint32) (n uint32, err error) {
+	if err := procGetFinalPathNameByHandleW.Find(); err != nil {
+		return 0, syscall.EWINDOWS
+	}
 	r0, _, e1 := syscall.SyscallN(procGetFinalPathNameByHandleW.Addr(), uintptr(file), uintptr(unsafe.Pointer(filePath)), uintptr(filePathSize), uintptr(flags))
 	n = uint32(r0)
 	if n == 0 {
@@ -489,11 +492,56 @@ func RtlVirtualUnwind(handlerType uint32, baseAddress uintptr, pc uintptr, entry
 }
 
 func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint32, buf unsafe.Pointer, bufsize uint32) (err error) {
+	if err := procSetFileInformationByHandle.Find(); err != nil {
+		switch fileInformationClass {
+		case FileBasicInfo:
+			return ntSetFileBasicInfo(handle, buf)
+		case FileDispositionInfo:
+			return ntSetFileDispositionInfo(handle, buf)
+		default:
+			return syscall.EWINDOWS
+		}
+	}
 	r1, _, e1 := syscall.SyscallN(procSetFileInformationByHandle.Addr(), uintptr(handle), uintptr(fileInformationClass), uintptr(buf), uintptr(bufsize))
 	if r1 == 0 {
 		err = errnoErr(e1)
 	}
 	return
+}
+
+type fileBasicInformation struct {
+	CreationTime   int64
+	LastAccessTime int64
+	LastWriteTime  int64
+	ChangeTime     int64
+	FileAttributes uint32
+}
+
+func ntSetFileBasicInfo(handle syscall.Handle, buf unsafe.Pointer) error {
+	basic := (*FILE_BASIC_INFO)(buf)
+	info := fileBasicInformation{
+		CreationTime:   basic.CreationTime,
+		LastAccessTime: basic.LastAccessTime,
+		LastWriteTime:  basic.LastWriteTime,
+		ChangeTime:     basic.ChangedTime,
+		FileAttributes: basic.FileAttributes,
+	}
+	const fileBasicInformationClass = 4
+	if err := NtSetInformationFile(handle, &IO_STATUS_BLOCK{}, unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), fileBasicInformationClass); err != nil {
+		return err.(NTStatus).Errno()
+	}
+	return nil
+}
+
+func ntSetFileDispositionInfo(handle syscall.Handle, buf unsafe.Pointer) error {
+	disposition := (*FILE_DISPOSITION_INFO)(buf)
+	const fileDispositionInformationClass = 13
+	if err := NtSetInformationFile(handle, &IO_STATUS_BLOCK{}, unsafe.Pointer(&FILE_DISPOSITION_INFORMATION{
+		DeleteFile: disposition.DeleteFile,
+	}), uint32(unsafe.Sizeof(FILE_DISPOSITION_INFORMATION{})), fileDispositionInformationClass); err != nil {
+		return err.(NTStatus).Errno()
+	}
+	return nil
 }
 
 func UnlockFileEx(file syscall.Handle, reserved uint32, bytesLow uint32, bytesHigh uint32, overlapped *syscall.Overlapped) (err error) {

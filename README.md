@@ -26,10 +26,12 @@ _Gopher image by [Renee French][rf], licensed under [Creative Commons 4.0 Attrib
 Current release includes all [go-legacy-win7](https://github.com/thongtech/go-legacy-win7) modifications, plus:
 
 - Set PE minimum target major version to 5 for Windows XP binaries
-- Load Vista+ kernel32 APIs dynamically instead of static import (`CreateWaitableTimerExW`, `GetErrorMode`, `GetQueuedCompletionStatusEx`, `RaiseFailFastException`, `WerGetFlags`, `WerSetFlags`)
+- Load Vista+ kernel32 APIs dynamically instead of static import (`CreateWaitableTimerExW`, `GetErrorMode`, `GetQueuedCompletionStatusEx`, `RaiseFailFastException`, `WerGetFlags`, `WerSetFlags`, `AddVectoredContinueHandler`)
+- Fall back to `SetUnhandledExceptionFilter` when `AddVectoredContinueHandler` is unavailable
 - Fall back to `GetQueuedCompletionStatus` in the runtime netpoller when `GetQueuedCompletionStatusEx` is unavailable
 - Fall back to `SetErrorMode` when `GetErrorMode` is unavailable
 - Fall back to `CancelIo` and no-op proc-thread attribute helpers when those APIs are unavailable
+- Fall back to `NtSetInformationFile` when `SetFileInformationByHandle` and `GetFinalPathNameByHandle` are unavailable
 - Includes all improvements and bug fixes from the corresponding upstream Go release
 
 Inherited from go-legacy-win7:

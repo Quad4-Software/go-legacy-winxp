@@ -17,7 +17,6 @@ const (
 	_NSIG = 65
 )
 
-//go:cgo_import_dynamic runtime._AddVectoredContinueHandler AddVectoredContinueHandler%2 "kernel32.dll"
 //go:cgo_import_dynamic runtime._AddVectoredExceptionHandler AddVectoredExceptionHandler%2 "kernel32.dll"
 //go:cgo_import_dynamic runtime._CloseHandle CloseHandle%1 "kernel32.dll"
 //go:cgo_import_dynamic runtime._CreateEventA CreateEventA%4 "kernel32.dll"
@@ -70,7 +69,6 @@ var (
 	// All these variables are set by the Windows executable
 	// loader before the Go program starts.
 	_AddDllDirectory,
-	_AddVectoredContinueHandler,
 	_AddVectoredExceptionHandler,
 	_CloseHandle,
 	_CreateEventA,
@@ -116,6 +114,7 @@ var (
 	_WriteConsoleW,
 	_WriteFile,
 	// Loaded dynamically in loadOptionalSyscalls (missing on Windows XP).
+	_AddVectoredContinueHandler,
 	_CreateWaitableTimerExW,
 	_GetErrorMode,
 	_GetQueuedCompletionStatus,
@@ -331,6 +330,7 @@ func loadOptionalSyscalls() {
 	_RtlGetCurrentPeb = windowsFindfunc(n32, []byte("RtlGetCurrentPeb\000"))
 	_RtlGetVersion = windowsFindfunc(n32, []byte("RtlGetVersion\000"))
 
+	_AddVectoredContinueHandler = windowsFindfunc(k32, []byte("AddVectoredContinueHandler\000"))
 	_GetErrorMode = windowsFindfunc(k32, []byte("GetErrorMode\000"))
 	_WerGetFlags = windowsFindfunc(k32, []byte("WerGetFlags\000"))
 	_WerSetFlags = windowsFindfunc(k32, []byte("WerSetFlags\000"))

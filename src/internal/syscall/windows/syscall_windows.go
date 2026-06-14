@@ -417,6 +417,10 @@ func ErrorLoadingGetTempPath2() error {
 	return procGetTempPath2W.Find()
 }
 
+func ErrorLoadingGetFinalPathNameByHandle() error {
+	return procGetFinalPathNameByHandleW.Find()
+}
+
 //sys	CreateEnvironmentBlock(block **uint16, token syscall.Token, inheritExisting bool) (err error) = userenv.CreateEnvironmentBlock
 //sys	DestroyEnvironmentBlock(block *uint16) (err error) = userenv.DestroyEnvironmentBlock
 //sys	CreateEvent(eventAttrs *SecurityAttributes, manualReset uint32, initialState uint32, name *uint16) (handle syscall.Handle, err error) = kernel32.CreateEventW

@@ -52,13 +52,13 @@ func sigresume()
 
 func initExceptionHandler() {
 	stdcall(_AddVectoredExceptionHandler, 1, abi.FuncPCABI0(exceptiontramp))
-	if GOARCH == "386" {
-		// use SetUnhandledExceptionFilter for windows-386.
-		// note: SetUnhandledExceptionFilter handler won't be called, if debugging.
-		stdcall(_SetUnhandledExceptionFilter, abi.FuncPCABI0(lastcontinuetramp))
-	} else {
+	if _AddVectoredContinueHandler != nil {
 		stdcall(_AddVectoredContinueHandler, 1, abi.FuncPCABI0(firstcontinuetramp))
 		stdcall(_AddVectoredContinueHandler, 0, abi.FuncPCABI0(lastcontinuetramp))
+	} else {
+		// AddVectoredContinueHandler is unavailable on Windows XP.
+		// note: SetUnhandledExceptionFilter handler won't be called, if debugging.
+		stdcall(_SetUnhandledExceptionFilter, abi.FuncPCABI0(lastcontinuetramp))
 	}
 }
 
