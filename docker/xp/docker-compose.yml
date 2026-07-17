@@ -1,0 +1,23 @@
+services:
+  windows-xp:
+    image: dockurr/windows:latest
+    container_name: go-legacy-winxp-test
+    environment:
+      VERSION: "xp"
+      RAM_SIZE: "2G"
+      CPU_CORES: "2"
+      DISK_SIZE: "16G"
+      USERNAME: "docker"
+      PASSWORD: "admin"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "8006:8006"
+    volumes:
+      - ./storage:/storage
+      - ./oem:/oem
+      - ./shared:/shared
+    stop_grace_period: 2m

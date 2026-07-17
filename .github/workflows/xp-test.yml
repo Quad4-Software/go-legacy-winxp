@@ -1,0 +1,103 @@
+name: XP Compatibility Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/runtime/os_windows.go"
+      - "src/runtime/signal_windows.go"
+      - "src/runtime/netpoll_windows.go"
+      - "src/cmd/link/internal/ld/pe.go"
+      - "src/internal/syscall/windows/**"
+      - "src/syscall/zsyscall_windows.go"
+      - "src/os/file_windows.go"
+      - "patches/0010-Add-Windows-XP-support.patch"
+      - "testdata/xp-smoke/**"
+      - "docker/xp/**"
+      - "scripts/check-xp-pe.sh"
+      - "scripts/test-xp-docker.sh"
+      - ".github/workflows/xp-test.yml"
+  pull_request:
+    paths:
+      - "src/runtime/os_windows.go"
+      - "src/runtime/signal_windows.go"
+      - "src/runtime/netpoll_windows.go"
+      - "src/cmd/link/internal/ld/pe.go"
+      - "src/internal/syscall/windows/**"
+      - "src/syscall/zsyscall_windows.go"
+      - "src/os/file_windows.go"
+      - "patches/0010-Add-Windows-XP-support.patch"
+      - "testdata/xp-smoke/**"
+      - "docker/xp/**"
+      - "scripts/check-xp-pe.sh"
+      - "scripts/test-xp-docker.sh"
+      - ".github/workflows/xp-test.yml"
+
+jobs:
+  pe-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up bootstrap Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+          cache: false
+
+      - name: Build toolchain
+        working-directory: src
+        env:
+          CGO_ENABLED: "0"
+        run: ./make.bash
+
+      - name: PE and import checks
+        run: ./scripts/check-xp-pe.sh
+
+  xp-docker:
+    needs: pe-check
+    runs-on: ubuntu-latest
+    # Nested KVM is usually unavailable on GitHub-hosted runners.
+    # This job no-ops there and is meant for self-hosted runners with /dev/kvm
+    # or local use of scripts/test-xp-docker.sh.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check KVM
+        id: kvm
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            ls -l /dev/kvm
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "No /dev/kvm on this runner. Skipping live XP Docker test."
+            echo "Run locally: ./scripts/test-xp-docker.sh"
+          fi
+
+      - name: Set up bootstrap Go
+        if: steps.kvm.outputs.available == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+          cache: false
+
+      - name: Build toolchain
+        if: steps.kvm.outputs.available == 'true'
+        working-directory: src
+        env:
+          CGO_ENABLED: "0"
+        run: ./make.bash
+
+      - name: Cache XP disk image
+        if: steps.kvm.outputs.available == 'true'
+        uses: actions/cache@v4
+        with:
+          path: docker/xp/storage
+          key: xp-disk-${{ runner.os }}-v1
+
+      - name: Run XP Docker smoke test
+        if: steps.kvm.outputs.available == 'true'
+        env:
+          XP_TEST_TIMEOUT: "3600"
+        run: ./scripts/test-xp-docker.sh
