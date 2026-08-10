@@ -1,11 +1,14 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: go-legacy-winxp <go-legacy-winxp@local>
-Date: Sun, 14 Jun 2026 00:00:00 +0000
-Subject: [PATCH] Add Windows XP support
+From 3d7affd370d5638f81326e8246f3fe6a5650f5dd Mon Aug 10 00:00:00 2026 +0000
+Subject: [PATCH 0010] Add Windows XP support
 
+Preserve Windows XP compatibility: PE 5.1 targeting and dynamic
+loading of Vista+ APIs.
+---
+diff --git a/src/cmd/link/internal/ld/pe.go b/src/cmd/link/internal/ld/pe.go
+index b49da42c..851f0646 100644
 --- a/src/cmd/link/internal/ld/pe.go
 +++ b/src/cmd/link/internal/ld/pe.go
-@@ -152,7 +152,7 @@
+@@ -152,7 +152,7 @@ const (
  )
  
  const (
@@ -14,9 +17,11 @@ Subject: [PATCH] Add Windows XP support
  	PeMinimumTargetMinorVersion = 1
  )
  
+diff --git a/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go b/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
+index f25b7308..96044839 100644
 --- a/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
 +++ b/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
-@@ -1759,6 +1759,9 @@
+@@ -1759,6 +1759,9 @@ func CancelIo(s Handle) (err error) {
  }
  
  func CancelIoEx(s Handle, o *Overlapped) (err error) {
@@ -26,7 +31,7 @@ Subject: [PATCH] Add Windows XP support
  	r1, _, e1 := syscall.SyscallN(procCancelIoEx.Addr(), uintptr(s), uintptr(unsafe.Pointer(o)))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -1966,6 +1969,9 @@
+@@ -1966,6 +1969,9 @@ func DeleteFile(path *uint16) (err error) {
  }
  
  func deleteProcThreadAttributeList(attrlist *ProcThreadAttributeList) {
@@ -36,7 +41,7 @@ Subject: [PATCH] Add Windows XP support
  	syscall.SyscallN(procDeleteProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)))
  	return
  }
-@@ -2779,6 +2785,13 @@
+@@ -2779,6 +2785,13 @@ func getWindowsDirectory(dir *uint16, dirLen uint32) (len uint32, err error) {
  }
  
  func initializeProcThreadAttributeList(attrlist *ProcThreadAttributeList, attrcount uint32, flags uint32, size *uintptr) (err error) {
@@ -50,7 +55,7 @@ Subject: [PATCH] Add Windows XP support
  	r1, _, e1 := syscall.SyscallN(procInitializeProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)), uintptr(attrcount), uintptr(flags), uintptr(unsafe.Pointer(size)))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -3492,6 +3505,9 @@
+@@ -3492,6 +3505,9 @@ func UnmapViewOfFile(addr uintptr) (err error) {
  }
  
  func updateProcThreadAttribute(attrlist *ProcThreadAttributeList, flags uint32, attr uintptr, value unsafe.Pointer, size uintptr, prevvalue unsafe.Pointer, returnedsize *uintptr) (err error) {
@@ -60,9 +65,11 @@ Subject: [PATCH] Add Windows XP support
  	r1, _, e1 := syscall.SyscallN(procUpdateProcThreadAttribute.Addr(), uintptr(unsafe.Pointer(attrlist)), uintptr(flags), uintptr(attr), uintptr(value), uintptr(size), uintptr(prevvalue), uintptr(unsafe.Pointer(returnedsize)))
  	if r1 == 0 {
  		err = errnoErr(e1)
+diff --git a/src/internal/syscall/windows/at_windows.go b/src/internal/syscall/windows/at_windows.go
+index 81361c98..d930c302 100644
 --- a/src/internal/syscall/windows/at_windows.go
 +++ b/src/internal/syscall/windows/at_windows.go
-@@ -325,10 +325,13 @@
+@@ -325,10 +325,13 @@ var TestDeleteatFallback bool
  // for compatibility with older Windows versions and file systems
  // over performance.
  func deleteatFallback(h syscall.Handle) error {
@@ -78,7 +85,7 @@ Subject: [PATCH] Add Windows XP support
  		wh, err := ReOpenFile(h,
  			FILE_WRITE_ATTRIBUTES,
  			FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
-@@ -337,28 +340,34 @@
+@@ -337,28 +340,34 @@ func deleteatFallback(h syscall.Handle) error {
  		if err != nil {
  			return err
  		}
@@ -122,9 +129,11 @@ Subject: [PATCH] Add Windows XP support
  }
  
  func Renameat(olddirfd syscall.Handle, oldpath string, newdirfd syscall.Handle, newpath string) error {
+diff --git a/src/internal/syscall/windows/syscall_windows.go b/src/internal/syscall/windows/syscall_windows.go
+index 9f3ea26c..aecc75a6 100644
 --- a/src/internal/syscall/windows/syscall_windows.go
 +++ b/src/internal/syscall/windows/syscall_windows.go
-@@ -417,6 +417,10 @@
+@@ -417,6 +417,10 @@ func ErrorLoadingGetTempPath2() error {
  	return procGetTempPath2W.Find()
  }
  
@@ -135,9 +144,11 @@ Subject: [PATCH] Add Windows XP support
  //sys	CreateEnvironmentBlock(block **uint16, token syscall.Token, inheritExisting bool) (err error) = userenv.CreateEnvironmentBlock
  //sys	DestroyEnvironmentBlock(block *uint16) (err error) = userenv.DestroyEnvironmentBlock
  //sys	CreateEvent(eventAttrs *SecurityAttributes, manualReset uint32, initialState uint32, name *uint16) (handle syscall.Handle, err error) = kernel32.CreateEventW
+diff --git a/src/internal/syscall/windows/zsyscall_windows.go b/src/internal/syscall/windows/zsyscall_windows.go
+index 26c66cfd..6b034ece 100644
 --- a/src/internal/syscall/windows/zsyscall_windows.go
 +++ b/src/internal/syscall/windows/zsyscall_windows.go
-@@ -363,6 +363,9 @@
+@@ -363,6 +363,9 @@ func GetFileSizeEx(handle syscall.Handle, size *int64) (err error) {
  }
  
  func GetFinalPathNameByHandle(file syscall.Handle, filePath *uint16, filePathSize uint32, flags uint32) (n uint32, err error) {
@@ -147,7 +158,7 @@ Subject: [PATCH] Add Windows XP support
  	r0, _, e1 := syscall.SyscallN(procGetFinalPathNameByHandleW.Addr(), uintptr(file), uintptr(unsafe.Pointer(filePath)), uintptr(filePathSize), uintptr(flags))
  	n = uint32(r0)
  	if n == 0 {
-@@ -489,6 +492,16 @@
+@@ -489,6 +492,16 @@ func RtlVirtualUnwind(handlerType uint32, baseAddress uintptr, pc uintptr, entry
  }
  
  func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint32, buf unsafe.Pointer, bufsize uint32) (err error) {
@@ -164,7 +175,7 @@ Subject: [PATCH] Add Windows XP support
  	r1, _, e1 := syscall.SyscallN(procSetFileInformationByHandle.Addr(), uintptr(handle), uintptr(fileInformationClass), uintptr(buf), uintptr(bufsize))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -496,6 +509,41 @@
+@@ -496,6 +509,41 @@ func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint
  	return
  }
  
@@ -206,9 +217,11 @@ Subject: [PATCH] Add Windows XP support
  func UnlockFileEx(file syscall.Handle, reserved uint32, bytesLow uint32, bytesHigh uint32, overlapped *syscall.Overlapped) (err error) {
  	r1, _, e1 := syscall.SyscallN(procUnlockFileEx.Addr(), uintptr(file), uintptr(reserved), uintptr(bytesLow), uintptr(bytesHigh), uintptr(unsafe.Pointer(overlapped)))
  	if r1 == 0 {
+diff --git a/src/os/file_windows.go b/src/os/file_windows.go
+index 8f0827a2..3c45d2d6 100644
 --- a/src/os/file_windows.go
 +++ b/src/os/file_windows.go
-@@ -429,7 +429,7 @@
+@@ -429,7 +429,7 @@ func normaliseLinkPath(path string) (string, error) {
  	}
  
  	// \??\Volume{abc}\
@@ -217,9 +230,11 @@ Subject: [PATCH] Add Windows XP support
  		return `\\?\` + path[4:], nil
  	}
  	winreadlinkvolume.IncNonDefault()
+diff --git a/src/runtime/netpoll_windows.go b/src/runtime/netpoll_windows.go
+index db5d0435..f2c0ef84 100644
 --- a/src/runtime/netpoll_windows.go
 +++ b/src/runtime/netpoll_windows.go
-@@ -187,21 +187,42 @@
+@@ -187,21 +187,42 @@ func netpoll(delay int64) (gList, int32) {
  	} else {
  		wait = uint32(delay / 1e6)
  	}
@@ -240,7 +255,9 @@ Subject: [PATCH] Add Windows XP support
 +		nn := len(entries) / int(gomaxprocs)
 +		if nn < 8 {
 +			nn = 8
-+		}
+ 		}
+-		println("runtime: GetQueuedCompletionStatusEx failed (errno=", errno, ")")
+-		throw("runtime: netpoll failed")
 +		if stdcall(_GetQueuedCompletionStatusEx, iocphandle, uintptr(unsafe.Pointer(&entries[0])), uintptr(nn), uintptr(unsafe.Pointer(&n)), uintptr(wait), 0) == 0 {
 +			mp.blocked = false
 +			errno := getlasterror()
@@ -249,9 +266,7 @@ Subject: [PATCH] Add Windows XP support
 +			}
 +			println("runtime: GetQueuedCompletionStatusEx failed (errno=", errno, ")")
 +			throw("runtime: netpoll failed")
- 		}
--		println("runtime: GetQueuedCompletionStatusEx failed (errno=", errno, ")")
--		throw("runtime: netpoll failed")
++		}
 +	} else if _GetQueuedCompletionStatus != nil {
 +		var bytes uint32
 +		var key uintptr
@@ -273,9 +288,11 @@ Subject: [PATCH] Add Windows XP support
  	}
  	mp.blocked = false
  	delta := int32(0)
+diff --git a/src/runtime/os_windows.go b/src/runtime/os_windows.go
+index 2c5d22ef..18cc3f31 100644
 --- a/src/runtime/os_windows.go
 +++ b/src/runtime/os_windows.go
-@@ -17,24 +17,20 @@
+@@ -17,24 +17,20 @@ const (
  	_NSIG = 65
  )
  
@@ -300,7 +317,7 @@ Subject: [PATCH] Add Windows XP support
  //go:cgo_import_dynamic runtime._GetStdHandle GetStdHandle%1 "kernel32.dll"
  //go:cgo_import_dynamic runtime._GetSystemDirectoryA GetSystemDirectoryA%2 "kernel32.dll"
  //go:cgo_import_dynamic runtime._GetSystemInfo GetSystemInfo%1 "kernel32.dll"
-@@ -45,7 +41,6 @@
+@@ -45,7 +41,6 @@ const (
  //go:cgo_import_dynamic runtime._PostQueuedCompletionStatus PostQueuedCompletionStatus%4 "kernel32.dll"
  //go:cgo_import_dynamic runtime._QueryPerformanceCounter QueryPerformanceCounter%1 "kernel32.dll"
  //go:cgo_import_dynamic runtime._QueryPerformanceFrequency QueryPerformanceFrequency%1 "kernel32.dll"
@@ -308,7 +325,7 @@ Subject: [PATCH] Add Windows XP support
  //go:cgo_import_dynamic runtime._ResumeThread ResumeThread%1 "kernel32.dll"
  //go:cgo_import_dynamic runtime._RtlLookupFunctionEntry RtlLookupFunctionEntry%3 "kernel32.dll"
  //go:cgo_import_dynamic runtime._RtlVirtualUnwind  RtlVirtualUnwind%8 "kernel32.dll"
-@@ -64,8 +59,6 @@
+@@ -64,8 +59,6 @@ const (
  //go:cgo_import_dynamic runtime._VirtualQuery VirtualQuery%3 "kernel32.dll"
  //go:cgo_import_dynamic runtime._WaitForSingleObject WaitForSingleObject%2 "kernel32.dll"
  //go:cgo_import_dynamic runtime._WaitForMultipleObjects WaitForMultipleObjects%4 "kernel32.dll"
@@ -317,7 +334,7 @@ Subject: [PATCH] Add Windows XP support
  //go:cgo_import_dynamic runtime._WriteConsoleW WriteConsoleW%5 "kernel32.dll"
  //go:cgo_import_dynamic runtime._WriteFile WriteFile%5 "kernel32.dll"
  
-@@ -76,24 +69,20 @@
+@@ -76,24 +69,20 @@ var (
  	// All these variables are set by the Windows executable
  	// loader before the Go program starts.
  	_AddDllDirectory,
@@ -342,7 +359,7 @@ Subject: [PATCH] Add Windows XP support
  	_GetStdHandle,
  	_GetSystemDirectoryA,
  	_GetSystemInfo,
-@@ -104,7 +93,6 @@
+@@ -104,7 +93,6 @@ var (
  	_PostQueuedCompletionStatus,
  	_QueryPerformanceCounter,
  	_QueryPerformanceFrequency,
@@ -350,7 +367,7 @@ Subject: [PATCH] Add Windows XP support
  	_ResumeThread,
  	_RtlLookupFunctionEntry,
  	_RtlVirtualUnwind,
-@@ -123,10 +111,17 @@
+@@ -123,10 +111,17 @@ var (
  	_VirtualQuery,
  	_WaitForSingleObject,
  	_WaitForMultipleObjects,
@@ -370,7 +387,7 @@ Subject: [PATCH] Add Windows XP support
  	_ stdFunction
  
  	// Use RtlGenRandom to generate cryptographically random data.
-@@ -334,6 +329,15 @@
+@@ -334,6 +329,15 @@ func loadOptionalSyscalls() {
  	}
  	_RtlGetCurrentPeb = windowsFindfunc(n32, []byte("RtlGetCurrentPeb\000"))
  	_RtlGetVersion = windowsFindfunc(n32, []byte("RtlGetVersion\000"))
@@ -386,7 +403,7 @@ Subject: [PATCH] Add Windows XP support
  }
  
  func monitorSuspendResume() {
-@@ -451,6 +455,9 @@
+@@ -451,6 +455,9 @@ var haveHighResSleep = false
  // resolution timer. createHighResTimer returns new timer
  // handle or 0, if CreateWaitableTimerEx failed.
  func createHighResTimer() uintptr {
@@ -396,9 +413,11 @@ Subject: [PATCH] Add Windows XP support
  	// As per @jstarks, see
  	// https://github.com/golang/go/issues/8687#issuecomment-656259353
  	return stdcall(_CreateWaitableTimerExW, 0, 0,
+diff --git a/src/runtime/signal_windows.go b/src/runtime/signal_windows.go
+index 40547b81..a2c5e22f 100644
 --- a/src/runtime/signal_windows.go
 +++ b/src/runtime/signal_windows.go
-@@ -11,9 +11,17 @@
+@@ -11,9 +11,17 @@ import (
  )
  
  func preventErrorDialogs() {
@@ -416,7 +435,7 @@ Subject: [PATCH] Add Windows XP support
  	// Disable WER fault reporting UI.
  	// Do this even if WER is disabled as a whole,
  	// as WER might be enabled later with setTraceback("wer")
-@@ -25,6 +33,9 @@
+@@ -25,6 +33,9 @@ func preventErrorDialogs() {
  
  // enableWER re-enables Windows error reporting without fault reporting UI.
  func enableWER() {
@@ -426,7 +445,7 @@ Subject: [PATCH] Add Windows XP support
  	// re-enable Windows Error Reporting
  	errormode := stdcall(_GetErrorMode)
  	if errormode&windows.SEM_NOGPFAULTERRORBOX != 0 {
-@@ -41,13 +52,13 @@
+@@ -41,13 +52,13 @@ func sigresume()
  
  func initExceptionHandler() {
  	stdcall(_AddVectoredExceptionHandler, 1, abi.FuncPCABI0(exceptiontramp))
@@ -445,7 +464,7 @@ Subject: [PATCH] Add Windows XP support
  	}
  }
  
-@@ -458,6 +469,9 @@
+@@ -458,6 +469,9 @@ func dieFromException(info *windows.ExceptionRecord, r *windows.Context) {
  			}
  		}
  	}
@@ -455,9 +474,11 @@ Subject: [PATCH] Add Windows XP support
  	stdcall(_RaiseFailFastException, uintptr(unsafe.Pointer(info)), uintptr(unsafe.Pointer(r)), windows.FAIL_FAST_GENERATE_EXCEPTION_ADDRESS)
  }
  
+diff --git a/src/syscall/zsyscall_windows.go b/src/syscall/zsyscall_windows.go
+index 7d049c9e..c453eab4 100644
 --- a/src/syscall/zsyscall_windows.go
 +++ b/src/syscall/zsyscall_windows.go
-@@ -474,6 +474,9 @@
+@@ -474,6 +474,9 @@ func CancelIo(s Handle) (err error) {
  }
  
  func CancelIoEx(s Handle, o *Overlapped) (err error) {
@@ -467,7 +488,7 @@ Subject: [PATCH] Add Windows XP support
  	r1, _, e1 := SyscallN(procCancelIoEx.Addr(), uintptr(s), uintptr(unsafe.Pointer(o)))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -578,6 +581,9 @@
+@@ -578,6 +581,9 @@ func DeleteFile(path *uint16) (err error) {
  }
  
  func deleteProcThreadAttributeList(attrlist *_PROC_THREAD_ATTRIBUTE_LIST) {
@@ -477,7 +498,7 @@ Subject: [PATCH] Add Windows XP support
  	SyscallN(procDeleteProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)))
  	return
  }
-@@ -917,6 +923,13 @@
+@@ -917,6 +923,13 @@ func GetVersion() (ver uint32, err error) {
  }
  
  func initializeProcThreadAttributeList(attrlist *_PROC_THREAD_ATTRIBUTE_LIST, attrcount uint32, flags uint32, size *uintptr) (err error) {
@@ -491,7 +512,7 @@ Subject: [PATCH] Add Windows XP support
  	r1, _, e1 := SyscallN(procInitializeProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)), uintptr(attrcount), uintptr(flags), uintptr(unsafe.Pointer(size)))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -1144,6 +1157,9 @@
+@@ -1144,6 +1157,9 @@ func UnmapViewOfFile(addr uintptr) (err error) {
  }
  
  func updateProcThreadAttribute(attrlist *_PROC_THREAD_ATTRIBUTE_LIST, flags uint32, attr uintptr, value unsafe.Pointer, size uintptr, prevvalue unsafe.Pointer, returnedsize *uintptr) (err error) {
