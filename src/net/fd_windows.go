@@ -60,22 +60,17 @@ func (fd *netFD) init() error {
 	case "udp", "udp4", "udp6":
 		// Disable reporting of PORT_UNREACHABLE errors.
 		// See https://go.dev/issue/5834.
+		// SIO_UDP_CONNRESET and SIO_UDP_NETRESET are not supported on Windows XP.
 		ret := uint32(0)
 		flag := uint32(0)
 		size := uint32(unsafe.Sizeof(flag))
-		err := syscall.WSAIoctl(fd.pfd.Sysfd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
-		if err != nil {
-			return wrapSyscallError("wsaioctl", err)
-		}
+		_ = syscall.WSAIoctl(fd.pfd.Sysfd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
 		// Disable reporting of NET_UNREACHABLE errors.
 		// See https://go.dev/issue/68614.
 		ret = 0
 		flag = 0
 		size = uint32(unsafe.Sizeof(flag))
-		err = syscall.WSAIoctl(fd.pfd.Sysfd, windows.SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
-		if err != nil {
-			return wrapSyscallError("wsaioctl", err)
-		}
+		_ = syscall.WSAIoctl(fd.pfd.Sysfd, windows.SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
 	}
 	return nil
 }
