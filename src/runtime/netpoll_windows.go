@@ -202,6 +202,9 @@ func netpoll(delay int64) (gList, int32) {
 			if errno == windows.WAIT_TIMEOUT {
 				return gList{}, 0
 			}
+			if errno == windows.ERROR_OPERATION_ABORTED {
+				return gList{}, 0
+			}
 			println("runtime: GetQueuedCompletionStatusEx failed (errno=", errno, ")")
 			throw("runtime: netpoll failed")
 		}
@@ -213,6 +216,9 @@ func netpoll(delay int64) (gList, int32) {
 			mp.blocked = false
 			errno := getlasterror()
 			if errno == windows.WAIT_TIMEOUT {
+				return gList{}, 0
+			}
+			if errno == windows.ERROR_OPERATION_ABORTED {
 				return gList{}, 0
 			}
 			println("runtime: GetQueuedCompletionStatus failed (errno=", errno, ")")

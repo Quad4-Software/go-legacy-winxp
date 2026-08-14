@@ -71,6 +71,8 @@ const INFINITE = 0xffffffff
 
 const WAIT_TIMEOUT = 258
 
+const ERROR_OPERATION_ABORTED = 995
+
 const FAIL_FAST_GENERATE_EXCEPTION_ADDRESS = 0x1
 
 const (

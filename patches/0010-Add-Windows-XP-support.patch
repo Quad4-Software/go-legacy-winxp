@@ -4,116 +4,39 @@ Subject: [PATCH 0010] Add Windows XP support
 Preserve Windows XP compatibility: PE 5.1 targeting and dynamic
 loading of Vista+ APIs.
 ---
-index b8249b38..ca5a92ea 100644
---- a/src/internal/syscall/windows/symlink_windows.go
-+++ b/src/internal/syscall/windows/symlink_windows.go
-@@ -20,6 +20,7 @@ const (
- 	FileStandardInfo               = 1    // FILE_STANDARD_INFO
- 	FileNameInfo                   = 2    // FILE_NAME_INFO
- 	FileDispositionInfo            = 4    // FILE_DISPOSITION_INFO
-+	FileEndOfFileInfo              = 6    // FILE_END_OF_FILE_INFO
- 	FileStreamInfo                 = 7    // FILE_STREAM_INFO
- 	FileCompressionInfo            = 8    // FILE_COMPRESSION_INFO
- 	FileAttributeTagInfo           = 9    // FILE_ATTRIBUTE_TAG_INFO
-diff --git a/src/internal/syscall/windows/types_windows.go b/src/internal/syscall/windows/types_windows.go
-index 21aeb8fa..0c9d36f0 100644
---- a/src/internal/syscall/windows/types_windows.go
-+++ b/src/internal/syscall/windows/types_windows.go
-@@ -222,6 +222,11 @@ type FILE_DISPOSITION_INFO struct {
- 	DeleteFile bool
- }
+index 6b109809..5daf00d9 100644
+--- a/src/internal/runtime/syscall/windows/defs_windows.go
++++ b/src/internal/runtime/syscall/windows/defs_windows.go
+@@ -71,6 +71,8 @@ const INFINITE = 0xffffffff
  
-+// https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_end_of_file_info
-+type FILE_END_OF_FILE_INFO struct {
-+	EndOfFile int64
-+}
+ const WAIT_TIMEOUT = 258
+ 
++const ERROR_OPERATION_ABORTED = 995
 +
- // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_file_disposition_information
- type FILE_DISPOSITION_INFORMATION struct {
- 	DeleteFile bool
-diff --git a/src/internal/syscall/windows/zsyscall_windows.go b/src/internal/syscall/windows/zsyscall_windows.go
-index 49f1b95e..3e90b55c 100644
---- a/src/internal/syscall/windows/zsyscall_windows.go
-+++ b/src/internal/syscall/windows/zsyscall_windows.go
-@@ -504,6 +504,8 @@ func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint
- 			return ntSetFileBasicInfo(handle, buf)
- 		case FileDispositionInfo:
- 			return ntSetFileDispositionInfo(handle, buf)
-+		case FileEndOfFileInfo:
-+			return ntSetFileEndOfFileInfo(handle, buf)
- 		default:
- 			return syscall.EWINDOWS
- 		}
-@@ -550,6 +552,20 @@ func ntSetFileDispositionInfo(handle syscall.Handle, buf unsafe.Pointer) error {
- 	return nil
- }
+ const FAIL_FAST_GENERATE_EXCEPTION_ADDRESS = 0x1
  
-+func ntSetFileEndOfFileInfo(handle syscall.Handle, buf unsafe.Pointer) error {
-+	eof := (*FILE_END_OF_FILE_INFO)(buf)
-+	type fileEndOfFileInformation struct {
-+		EndOfFile int64
-+	}
-+	const fileEndOfFileInformationClass = 20
-+	if err := NtSetInformationFile(handle, &IO_STATUS_BLOCK{}, unsafe.Pointer(&fileEndOfFileInformation{
-+		EndOfFile: eof.EndOfFile,
-+	}), uint32(unsafe.Sizeof(fileEndOfFileInformation{})), fileEndOfFileInformationClass); err != nil {
-+		return err.(NTStatus).Errno()
-+	}
-+	return nil
-+}
-+
- func UnlockFileEx(file syscall.Handle, reserved uint32, bytesLow uint32, bytesHigh uint32, overlapped *syscall.Overlapped) (err error) {
- 	r1, _, e1 := syscall.SyscallN(procUnlockFileEx.Addr(), uintptr(file), uintptr(reserved), uintptr(bytesLow), uintptr(bytesHigh), uintptr(unsafe.Pointer(overlapped)))
- 	if r1 == 0 {
-diff --git a/src/net/fd_windows.go b/src/net/fd_windows.go
-index c28ce045..a8d451a2 100644
---- a/src/net/fd_windows.go
-+++ b/src/net/fd_windows.go
-@@ -60,22 +60,17 @@ func (fd *netFD) init() error {
- 	case "udp", "udp4", "udp6":
- 		// Disable reporting of PORT_UNREACHABLE errors.
- 		// See https://go.dev/issue/5834.
-+		// SIO_UDP_CONNRESET and SIO_UDP_NETRESET are not supported on Windows XP.
- 		ret := uint32(0)
- 		flag := uint32(0)
- 		size := uint32(unsafe.Sizeof(flag))
--		err := syscall.WSAIoctl(fd.pfd.Sysfd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
--		if err != nil {
--			return wrapSyscallError("wsaioctl", err)
--		}
-+		_ = syscall.WSAIoctl(fd.pfd.Sysfd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
- 		// Disable reporting of NET_UNREACHABLE errors.
- 		// See https://go.dev/issue/68614.
- 		ret = 0
- 		flag = 0
- 		size = uint32(unsafe.Sizeof(flag))
--		err = syscall.WSAIoctl(fd.pfd.Sysfd, windows.SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
--		if err != nil {
--			return wrapSyscallError("wsaioctl", err)
--		}
-+		_ = syscall.WSAIoctl(fd.pfd.Sysfd, windows.SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
- 	}
- 	return nil
- }
-diff --git a/src/syscall/zsyscall_windows.go b/src/syscall/zsyscall_windows.go
-index c453eab4..f9a195b7 100644
---- a/src/syscall/zsyscall_windows.go
-+++ b/src/syscall/zsyscall_windows.go
-@@ -1108,6 +1108,17 @@ func SetFileCompletionNotificationModes(handle Handle, flags uint8) (err error)
- }
- 
- func setFileInformationByHandle(handle Handle, fileInformationClass uint32, buf unsafe.Pointer, bufsize uint32) (err error) {
-+	if err := procSetFileInformationByHandle.Find(); err != nil {
-+		const fileEndOfFileInfo = 6
-+		if fileInformationClass == fileEndOfFileInfo && bufsize >= 8 {
-+			length := *(*int64)(buf)
-+			if err := setFilePointerEx(handle, length, nil, FILE_BEGIN); err != nil {
-+				return err
+ const (
+diff --git a/src/runtime/netpoll_windows.go b/src/runtime/netpoll_windows.go
+index f2c0ef84..98d61a05 100644
+--- a/src/runtime/netpoll_windows.go
++++ b/src/runtime/netpoll_windows.go
+@@ -202,6 +202,9 @@ func netpoll(delay int64) (gList, int32) {
+ 			if errno == windows.WAIT_TIMEOUT {
+ 				return gList{}, 0
+ 			}
++			if errno == windows.ERROR_OPERATION_ABORTED {
++				return gList{}, 0
 +			}
-+			return SetEndOfFile(handle)
-+		}
-+		return EWINDOWS
-+	}
- 	r1, _, e1 := SyscallN(procSetFileInformationByHandle.Addr(), uintptr(handle), uintptr(fileInformationClass), uintptr(buf), uintptr(bufsize))
- 	if r1 == 0 {
- 		err = errnoErr(e1)
+ 			println("runtime: GetQueuedCompletionStatusEx failed (errno=", errno, ")")
+ 			throw("runtime: netpoll failed")
+ 		}
+@@ -215,6 +218,9 @@ func netpoll(delay int64) (gList, int32) {
+ 			if errno == windows.WAIT_TIMEOUT {
+ 				return gList{}, 0
+ 			}
++			if errno == windows.ERROR_OPERATION_ABORTED {
++				return gList{}, 0
++			}
+ 			println("runtime: GetQueuedCompletionStatus failed (errno=", errno, ")")
+ 			throw("runtime: netpoll failed")
+ 		}
