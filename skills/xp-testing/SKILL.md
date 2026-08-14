@@ -60,8 +60,9 @@ The XP SP3 ISO is fetched from Internet Archive by `scripts/fetch-xp-iso.sh` and
 ## Result protocol
 
 - Ignore intermediate markers such as `starting` in `result.txt`
-- Success only when the file content is `PASS` and `smoke.out` contains `go-legacy-winxp smoke ok` and `goarch=386`
+- Success only when the file content is `PASS`, `smoke.out` contains `go-legacy-winxp smoke ok`, `smoke: all checks passed`, and `goarch=386`
 - `smoke.exit` must be `0` on PASS
+- Guest also writes `smoke.log` (status + exit + output). Host writes `smoke-report.txt` after the run
 - Failure when content is `FAIL`, output validation fails, or on timeout
 - Prefer writing final status only as `PASS` or `FAIL` from guest scripts
 

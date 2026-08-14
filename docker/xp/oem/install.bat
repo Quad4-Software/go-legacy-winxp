@@ -5,6 +5,7 @@ set SHARE=
 set RESULT=
 set OUT=
 set EXITFILE=
+set LOGFILE=
 set STATUS=FAIL
 set EXITCODE=1
 
@@ -31,6 +32,7 @@ goto run_tests
 set RESULT=%SHARE%\result.txt
 set OUT=%SHARE%\smoke.out
 set EXITFILE=%SHARE%\smoke.exit
+set LOGFILE=%SHARE%\smoke.log
 echo starting > "%RESULT%"
 
 :run_tests
@@ -51,6 +53,10 @@ if not "%SHARE%"=="" (
   echo %EXITCODE% > "%EXITFILE%"
   if exist C:\OEM\smoke-386.out copy /Y C:\OEM\smoke-386.out "%OUT%" >nul
   if not exist C:\OEM\smoke-386.out echo no smoke output captured > "%OUT%"
+  echo status=%STATUS% > "%LOGFILE%"
+  echo exit=%EXITCODE% >> "%LOGFILE%"
+  echo --- stdout stderr --- >> "%LOGFILE%"
+  if exist "%OUT%" type "%OUT%" >> "%LOGFILE%"
 )
 
 REM Boot-time retest hook for cached disks.

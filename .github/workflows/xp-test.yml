@@ -134,4 +134,6 @@ jobs:
             docker/xp/shared/result.txt
             docker/xp/shared/smoke.out
             docker/xp/shared/smoke.exit
+            docker/xp/shared/smoke.log
+            docker/xp/shared/smoke-report.txt
           if-no-files-found: ignore

@@ -52,8 +52,14 @@ _testmain.go
 /docker/xp/oem/*.exe
 /docker/xp/shared/*.exe
 /docker/xp/shared/result.txt
+/docker/xp/shared/smoke.out
+/docker/xp/shared/smoke.log
+/docker/xp/shared/smoke.exit
+/docker/xp/shared/smoke-report.txt
 /docker/xp/shared/smoke*.out
 /docker/xp/shared/.keep
+/docker/xp/iso/*.iso
+/docker/xp/iso/*.partial
 
 # This file includes artifacts of Go build that should not be checked in.
 # For files created by specific development environment (e.g. editor),
