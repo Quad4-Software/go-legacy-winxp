@@ -222,6 +222,11 @@ type FILE_DISPOSITION_INFO struct {
 	DeleteFile bool
 }
 
+// https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_end_of_file_info
+type FILE_END_OF_FILE_INFO struct {
+	EndOfFile int64
+}
+
 // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_file_disposition_information
 type FILE_DISPOSITION_INFORMATION struct {
 	DeleteFile bool

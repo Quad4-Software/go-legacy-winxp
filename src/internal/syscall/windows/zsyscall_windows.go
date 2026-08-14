@@ -504,6 +504,8 @@ func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint
 			return ntSetFileBasicInfo(handle, buf)
 		case FileDispositionInfo:
 			return ntSetFileDispositionInfo(handle, buf)
+		case FileEndOfFileInfo:
+			return ntSetFileEndOfFileInfo(handle, buf)
 		default:
 			return syscall.EWINDOWS
 		}
@@ -545,6 +547,20 @@ func ntSetFileDispositionInfo(handle syscall.Handle, buf unsafe.Pointer) error {
 	if err := NtSetInformationFile(handle, &IO_STATUS_BLOCK{}, unsafe.Pointer(&FILE_DISPOSITION_INFORMATION{
 		DeleteFile: disposition.DeleteFile,
 	}), uint32(unsafe.Sizeof(FILE_DISPOSITION_INFORMATION{})), fileDispositionInformationClass); err != nil {
+		return err.(NTStatus).Errno()
+	}
+	return nil
+}
+
+func ntSetFileEndOfFileInfo(handle syscall.Handle, buf unsafe.Pointer) error {
+	eof := (*FILE_END_OF_FILE_INFO)(buf)
+	type fileEndOfFileInformation struct {
+		EndOfFile int64
+	}
+	const fileEndOfFileInformationClass = 20
+	if err := NtSetInformationFile(handle, &IO_STATUS_BLOCK{}, unsafe.Pointer(&fileEndOfFileInformation{
+		EndOfFile: eof.EndOfFile,
+	}), uint32(unsafe.Sizeof(fileEndOfFileInformation{})), fileEndOfFileInformationClass); err != nil {
 		return err.(NTStatus).Errno()
 	}
 	return nil

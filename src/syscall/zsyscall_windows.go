@@ -1108,6 +1108,17 @@ func SetFileCompletionNotificationModes(handle Handle, flags uint8) (err error) 
 }
 
 func setFileInformationByHandle(handle Handle, fileInformationClass uint32, buf unsafe.Pointer, bufsize uint32) (err error) {
+	if err := procSetFileInformationByHandle.Find(); err != nil {
+		const fileEndOfFileInfo = 6
+		if fileInformationClass == fileEndOfFileInfo && bufsize >= 8 {
+			length := *(*int64)(buf)
+			if err := setFilePointerEx(handle, length, nil, FILE_BEGIN); err != nil {
+				return err
+			}
+			return SetEndOfFile(handle)
+		}
+		return EWINDOWS
+	}
 	r1, _, e1 := SyscallN(procSetFileInformationByHandle.Addr(), uintptr(handle), uintptr(fileInformationClass), uintptr(buf), uintptr(bufsize))
 	if r1 == 0 {
 		err = errnoErr(e1)
