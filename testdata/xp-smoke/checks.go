@@ -262,9 +262,12 @@ func checkOpenReadWrite(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(f, buf); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	if string(buf) != "data" {
