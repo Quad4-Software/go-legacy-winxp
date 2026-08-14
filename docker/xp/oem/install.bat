@@ -40,15 +40,10 @@ C:\OEM\xp-smoke-386.exe > C:\OEM\smoke-386.out 2>&1
 if errorlevel 1 goto write_result
 set STATUS=PASS
 
-if exist C:\OEM\xp-smoke-amd64.exe (
-  C:\OEM\xp-smoke-amd64.exe > C:\OEM\smoke-amd64.out 2>&1
-)
-
 :write_result
 if not "%SHARE%"=="" (
   echo %STATUS% > "%RESULT%"
   if exist C:\OEM\smoke-386.out copy /Y C:\OEM\smoke-386.out "%OUT%" >nul
-  if exist C:\OEM\smoke-amd64.out copy /Y C:\OEM\smoke-amd64.out "%SHARE%\smoke-amd64.out" >nul
 )
 
 REM Boot-time retest hook for cached disks.

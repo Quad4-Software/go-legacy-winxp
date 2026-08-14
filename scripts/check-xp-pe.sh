@@ -16,15 +16,24 @@ export CGO_ENABLED=0
 
 echo "building windows/386 and windows/amd64 smoke binaries"
 GOOS=windows GOARCH=386 "$GO" build -C "$ROOT/testdata/xp-smoke" -o "$OUTDIR/xp-smoke-386.exe" .
-GOOS=windows GOARCH=amd64 "$GO" build -C "$ROOT/testdata/xp-smoke" -o "$OUTDIR/xp-smoke-amd64.exe" .
 
-# Also stage copies for shared-folder retests.
+amd64_cleanup=""
+if [[ "$OUTDIR" == *"/oem" ]]; then
+  rm -f "$OUTDIR/xp-smoke-amd64.exe"
+  amd64_exe="$(mktemp "${TMPDIR:-/tmp}/xp-smoke-amd64.XXXXXX.exe")"
+  amd64_cleanup=1
+else
+  amd64_exe="$OUTDIR/xp-smoke-amd64.exe"
+fi
+GOOS=windows GOARCH=amd64 "$GO" build -C "$ROOT/testdata/xp-smoke" -o "$amd64_exe" .
+
+# Also stage the 386 binary for shared-folder retests.
 SHARED="$ROOT/docker/xp/shared"
 mkdir -p "$SHARED"
 cp -f "$OUTDIR/xp-smoke-386.exe" "$SHARED/xp-smoke-386.exe"
-cp -f "$OUTDIR/xp-smoke-amd64.exe" "$SHARED/xp-smoke-amd64.exe"
+rm -f "$SHARED/xp-smoke-amd64.exe"
 
-python3 - "$OUTDIR/xp-smoke-386.exe" "$OUTDIR/xp-smoke-amd64.exe" <<'PY'
+python3 - "$OUTDIR/xp-smoke-386.exe" "$amd64_exe" <<'PY'
 import struct
 import sys
 
@@ -137,3 +146,7 @@ if failed:
     raise SystemExit(1)
 print("PE checks passed")
 PY
+
+if [[ -n "$amd64_cleanup" ]]; then
+  rm -f "$amd64_exe"
+fi

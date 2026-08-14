@@ -82,6 +82,7 @@ fi
 "$ROOT/scripts/check-xp-pe.sh" "$XP_DIR/oem"
 
 rm -f "$RESULT" "$SHARED/smoke.out" "$SHARED/smoke-amd64.out"
+rm -f "$XP_DIR/oem/xp-smoke-amd64.exe" "$SHARED/xp-smoke-amd64.exe"
 mkdir -p "$SHARED"
 : > "$SHARED/.keep"
 
