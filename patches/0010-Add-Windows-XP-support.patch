@@ -1,11 +1,11 @@
-From 3d7affd370d5638f81326e8246f3fe6a5650f5dd Mon Aug 10 00:00:00 2026 +0000
+From 85d286cbb5f94b6f2eae04468b1d14f18bdec8c1 Mon Aug 14 00:00:00 2026 +0000
 Subject: [PATCH 0010] Add Windows XP support
 
 Preserve Windows XP compatibility: PE 5.1 targeting and dynamic
 loading of Vista+ APIs.
 ---
 diff --git a/src/cmd/link/internal/ld/pe.go b/src/cmd/link/internal/ld/pe.go
-index b49da42c..851f0646 100644
+index c90ce9e3..851f0646 100644
 --- a/src/cmd/link/internal/ld/pe.go
 +++ b/src/cmd/link/internal/ld/pe.go
 @@ -152,7 +152,7 @@ const (
@@ -16,6 +16,15 @@ index b49da42c..851f0646 100644
 +	PeMinimumTargetMajorVersion = 5
  	PeMinimumTargetMinorVersion = 1
  )
+ 
+@@ -1759,7 +1759,7 @@ func peCreateExportFile(ctxt *Link, libName string) (fname string) {
+ 	var buf bytes.Buffer
+ 
+ 	if ctxt.BuildMode == BuildModeCShared {
+-		fmt.Fprintf(&buf, "LIBRARY %q\n", libName)
++		fmt.Fprintf(&buf, "LIBRARY %s\n", libName)
+ 	}
+ 	buf.WriteString("EXPORTS\n")
  
 diff --git a/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go b/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
 index f25b7308..96044839 100644

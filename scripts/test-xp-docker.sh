@@ -6,8 +6,39 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 XP_DIR="$ROOT/docker/xp"
 SHARED="$XP_DIR/shared"
 RESULT="$SHARED/result.txt"
-TIMEOUT_SECS="${XP_TEST_TIMEOUT:-3600}"
 COMPOSE=(docker compose -f "$XP_DIR/docker-compose.yml")
+
+resolve_storage_dir() {
+  local storage="$XP_DIR/storage"
+  if [[ -L "$storage" ]]; then
+    storage="$(readlink -f "$storage")"
+  fi
+  echo "$storage"
+}
+
+has_xp_disk_image() {
+  local storage="$1"
+  compgen -G "$storage/data.*" >/dev/null \
+    || [[ -f "$storage/windows.img" ]] \
+    || [[ -f "$storage/windows.base" ]]
+}
+
+validate_xp_storage() {
+  local storage
+  storage="$(resolve_storage_dir)"
+  mkdir -p "$storage"
+
+  if has_xp_disk_image "$storage" && [[ ! -f "$storage/windows.boot" ]]; then
+    echo "wiping stale XP storage at $storage (disk image without windows.boot)"
+    find "$storage" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  fi
+}
+
+if [[ -f "$(resolve_storage_dir)/windows.boot" ]]; then
+  TIMEOUT_SECS="${XP_TEST_TIMEOUT:-1800}"
+else
+  TIMEOUT_SECS="${XP_TEST_TIMEOUT:-7200}"
+fi
 
 if [[ ! -e /dev/kvm ]]; then
   echo "KVM device /dev/kvm not available" >&2
@@ -25,6 +56,8 @@ fi
 rm -f "$RESULT" "$SHARED/smoke.out" "$SHARED/smoke-amd64.out"
 mkdir -p "$SHARED"
 : > "$SHARED/.keep"
+
+validate_xp_storage
 
 # Windows Setup is unreliable on btrfs-backed disks. Prefer ext4/xfs under /tmp.
 storage_fs="$(df -T "$XP_DIR" | awk 'NR==2 {print $2}')"

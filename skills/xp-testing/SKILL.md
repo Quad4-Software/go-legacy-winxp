@@ -45,7 +45,7 @@ ls -l /dev/kvm
 
 Environment:
 
-- `XP_TEST_TIMEOUT` seconds to wait for guest `PASS`/`FAIL` (default `3600`)
+- `XP_TEST_TIMEOUT` seconds to wait for guest `PASS`/`FAIL` (default `7200` for first install, `1800` when `windows.boot` exists)
 - `GO` path to go binary (default `./bin/go`)
 
 Web viewer during Docker runs: `http://127.0.0.1:8006/`

@@ -1,14 +1,19 @@
 services:
   windows-xp:
-    image: dockurr/windows:latest
+    image: dockurr/windows:3.23
     container_name: go-legacy-winxp-test
+    privileged: true
     environment:
       VERSION: "xp"
       RAM_SIZE: "2G"
       CPU_CORES: "2"
+      CPU_MODEL: "qemu64"
       DISK_SIZE: "16G"
       USERNAME: "docker"
       PASSWORD: "admin"
+      HV: "N"
+      REMOVE: "N"
+      LOG: "Y"
     devices:
       - /dev/kvm
       - /dev/net/tun

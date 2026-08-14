@@ -94,10 +94,24 @@ jobs:
         uses: actions/cache@v4
         with:
           path: docker/xp/storage
-          key: xp-disk-${{ runner.os }}-v1
+          key: xp-disk-${{ runner.os }}-dockur-3.23-v2
+
+      - name: Validate XP storage cache
+        if: steps.kvm.outputs.available == 'true'
+        run: |
+          storage="docker/xp/storage"
+          if [[ -L "$storage" ]]; then
+            storage="$(readlink -f "$storage")"
+          fi
+          if compgen -G "$storage/data.*" >/dev/null || [[ -f "$storage/windows.img" ]]; then
+            if [[ ! -f "$storage/windows.boot" ]]; then
+              echo "removing incomplete XP disk cache"
+              find "$storage" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+            fi
+          fi
 
       - name: Run XP Docker smoke test
         if: steps.kvm.outputs.available == 'true'
         env:
-          XP_TEST_TIMEOUT: "3600"
+          XP_TEST_TIMEOUT: "7200"
         run: ./scripts/test-xp-docker.sh
