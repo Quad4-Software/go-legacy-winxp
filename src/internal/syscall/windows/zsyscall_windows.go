@@ -347,6 +347,9 @@ func GetCurrentThread() (pseudoHandle syscall.Handle, err error) {
 }
 
 func GetFileInformationByHandleEx(handle syscall.Handle, class uint32, info *byte, bufsize uint32) (err error) {
+	if err := procGetFileInformationByHandleEx.Find(); err != nil {
+		return ERROR_NOT_SUPPORTED
+	}
 	r1, _, e1 := syscall.SyscallN(procGetFileInformationByHandleEx.Addr(), uintptr(handle), uintptr(class), uintptr(unsafe.Pointer(info)), uintptr(bufsize))
 	if r1 == 0 {
 		err = errnoErr(e1)
@@ -414,6 +417,9 @@ func GetTempPath2(buflen uint32, buf *uint16) (n uint32, err error) {
 }
 
 func GetVolumeInformationByHandle(file syscall.Handle, volumeNameBuffer *uint16, volumeNameSize uint32, volumeNameSerialNumber *uint32, maximumComponentLength *uint32, fileSystemFlags *uint32, fileSystemNameBuffer *uint16, fileSystemNameSize uint32) (err error) {
+	if err := procGetVolumeInformationByHandleW.Find(); err != nil {
+		return syscall.EWINDOWS
+	}
 	r1, _, e1 := syscall.SyscallN(procGetVolumeInformationByHandleW.Addr(), uintptr(file), uintptr(unsafe.Pointer(volumeNameBuffer)), uintptr(volumeNameSize), uintptr(unsafe.Pointer(volumeNameSerialNumber)), uintptr(unsafe.Pointer(maximumComponentLength)), uintptr(unsafe.Pointer(fileSystemFlags)), uintptr(unsafe.Pointer(fileSystemNameBuffer)), uintptr(fileSystemNameSize))
 	if r1 == 0 {
 		err = errnoErr(e1)

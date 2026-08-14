@@ -80,6 +80,12 @@ validate_smoke_output() {
     return 1
   fi
 
+  check_count="$(grep -Eo 'smoke: [0-9]+ checks passed' "$SMOKE_OUT" | tail -1 | grep -Eo '[0-9]+')"
+  if [[ -z "$check_count" || "$check_count" -lt 30 ]]; then
+    echo "smoke.out reports only ${check_count:-0} checks (expected at least 30)" >&2
+    return 1
+  fi
+
   if ! grep -Fq "smoke: all checks passed" "$SMOKE_OUT"; then
     echo "smoke.out missing final success marker (guest may have crashed early)" >&2
     return 1

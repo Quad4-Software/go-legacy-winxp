@@ -1,4 +1,4 @@
-From 85d286cbb5f94b6f2eae04468b1d14f18bdec8c1 Mon Aug 14 00:00:00 2026 +0000
+From 67cfefdfe05d676c04482f423ecb02aae798482b Mon Aug 14 00:00:00 2026 +0000
 Subject: [PATCH 0010] Add Windows XP support
 
 Preserve Windows XP compatibility: PE 5.1 targeting and dynamic
@@ -154,10 +154,20 @@ index 9f3ea26c..aecc75a6 100644
  //sys	DestroyEnvironmentBlock(block *uint16) (err error) = userenv.DestroyEnvironmentBlock
  //sys	CreateEvent(eventAttrs *SecurityAttributes, manualReset uint32, initialState uint32, name *uint16) (handle syscall.Handle, err error) = kernel32.CreateEventW
 diff --git a/src/internal/syscall/windows/zsyscall_windows.go b/src/internal/syscall/windows/zsyscall_windows.go
-index 26c66cfd..6b034ece 100644
+index 26c66cfd..49f1b95e 100644
 --- a/src/internal/syscall/windows/zsyscall_windows.go
 +++ b/src/internal/syscall/windows/zsyscall_windows.go
-@@ -363,6 +363,9 @@ func GetFileSizeEx(handle syscall.Handle, size *int64) (err error) {
+@@ -347,6 +347,9 @@ func GetCurrentThread() (pseudoHandle syscall.Handle, err error) {
+ }
+ 
+ func GetFileInformationByHandleEx(handle syscall.Handle, class uint32, info *byte, bufsize uint32) (err error) {
++	if err := procGetFileInformationByHandleEx.Find(); err != nil {
++		return ERROR_NOT_SUPPORTED
++	}
+ 	r1, _, e1 := syscall.SyscallN(procGetFileInformationByHandleEx.Addr(), uintptr(handle), uintptr(class), uintptr(unsafe.Pointer(info)), uintptr(bufsize))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -363,6 +366,9 @@ func GetFileSizeEx(handle syscall.Handle, size *int64) (err error) {
  }
  
  func GetFinalPathNameByHandle(file syscall.Handle, filePath *uint16, filePathSize uint32, flags uint32) (n uint32, err error) {
@@ -167,7 +177,17 @@ index 26c66cfd..6b034ece 100644
  	r0, _, e1 := syscall.SyscallN(procGetFinalPathNameByHandleW.Addr(), uintptr(file), uintptr(unsafe.Pointer(filePath)), uintptr(filePathSize), uintptr(flags))
  	n = uint32(r0)
  	if n == 0 {
-@@ -489,6 +492,16 @@ func RtlVirtualUnwind(handlerType uint32, baseAddress uintptr, pc uintptr, entry
+@@ -411,6 +417,9 @@ func GetTempPath2(buflen uint32, buf *uint16) (n uint32, err error) {
+ }
+ 
+ func GetVolumeInformationByHandle(file syscall.Handle, volumeNameBuffer *uint16, volumeNameSize uint32, volumeNameSerialNumber *uint32, maximumComponentLength *uint32, fileSystemFlags *uint32, fileSystemNameBuffer *uint16, fileSystemNameSize uint32) (err error) {
++	if err := procGetVolumeInformationByHandleW.Find(); err != nil {
++		return syscall.EWINDOWS
++	}
+ 	r1, _, e1 := syscall.SyscallN(procGetVolumeInformationByHandleW.Addr(), uintptr(file), uintptr(unsafe.Pointer(volumeNameBuffer)), uintptr(volumeNameSize), uintptr(unsafe.Pointer(volumeNameSerialNumber)), uintptr(unsafe.Pointer(maximumComponentLength)), uintptr(unsafe.Pointer(fileSystemFlags)), uintptr(unsafe.Pointer(fileSystemNameBuffer)), uintptr(fileSystemNameSize))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -489,6 +498,16 @@ func RtlVirtualUnwind(handlerType uint32, baseAddress uintptr, pc uintptr, entry
  }
  
  func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint32, buf unsafe.Pointer, bufsize uint32) (err error) {
@@ -184,7 +204,7 @@ index 26c66cfd..6b034ece 100644
  	r1, _, e1 := syscall.SyscallN(procSetFileInformationByHandle.Addr(), uintptr(handle), uintptr(fileInformationClass), uintptr(buf), uintptr(bufsize))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -496,6 +509,41 @@ func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint
+@@ -496,6 +515,41 @@ func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint
  	return
  }
  
