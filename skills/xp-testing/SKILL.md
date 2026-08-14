@@ -40,6 +40,7 @@ ls -l /dev/kvm
 
 ```bash
 ./scripts/check-xp-pe.sh
+./scripts/fetch-xp-iso.sh
 ./scripts/test-xp-docker.sh
 ```
 
@@ -52,7 +53,9 @@ Web viewer during Docker runs: `http://127.0.0.1:8006/`
 
 ## Storage / filesystem caveat
 
-Windows Setup is unreliable on **btrfs**-backed disks. `test-xp-docker.sh` relocates the disk image to `/tmp/go-legacy-winxp-xp-storage` when the project filesystem is btrfs. Do not delete that cache unless you want a full XP reinstall.
+Windows Setup is unreliable on **btrfs**-backed disks. `test-xp-docker.sh` places the disk image under `/var/tmp/go-legacy-winxp-xp-storage` when the project is on btrfs. Do not delete that cache unless you want a full XP reinstall.
+
+The XP SP3 ISO is fetched from Internet Archive by `scripts/fetch-xp-iso.sh` and mounted as `custom.iso` so dockurr does not rely on dead bobpony/files.dog mirrors.
 
 ## Result protocol
 

@@ -15,6 +15,7 @@ on:
       - "testdata/xp-smoke/**"
       - "docker/xp/**"
       - "scripts/check-xp-pe.sh"
+      - "scripts/fetch-xp-iso.sh"
       - "scripts/test-xp-docker.sh"
       - ".github/workflows/xp-test.yml"
   pull_request:
@@ -30,6 +31,7 @@ on:
       - "testdata/xp-smoke/**"
       - "docker/xp/**"
       - "scripts/check-xp-pe.sh"
+      - "scripts/fetch-xp-iso.sh"
       - "scripts/test-xp-docker.sh"
       - ".github/workflows/xp-test.yml"
 
@@ -89,12 +91,19 @@ jobs:
           CGO_ENABLED: "0"
         run: ./make.bash
 
+      - name: Cache XP ISO
+        if: steps.kvm.outputs.available == 'true'
+        uses: actions/cache@v4
+        with:
+          path: docker/xp/iso/xp-sp3.iso
+          key: xp-iso-sp3-v1
+
       - name: Cache XP disk image
         if: steps.kvm.outputs.available == 'true'
         uses: actions/cache@v4
         with:
           path: docker/xp/storage
-          key: xp-disk-${{ runner.os }}-dockur-3.23-v2
+          key: xp-disk-${{ runner.os }}-dockur-6.04-v3
 
       - name: Validate XP storage cache
         if: steps.kvm.outputs.available == 'true'

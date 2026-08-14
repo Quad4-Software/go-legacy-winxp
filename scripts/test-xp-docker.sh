@@ -10,10 +10,38 @@ COMPOSE=(docker compose -f "$XP_DIR/docker-compose.yml")
 
 resolve_storage_dir() {
   local storage="$XP_DIR/storage"
+  if [[ -n "${XP_STORAGE:-}" ]]; then
+    echo "$XP_STORAGE"
+    return
+  fi
   if [[ -L "$storage" ]]; then
     storage="$(readlink -f "$storage")"
   fi
   echo "$storage"
+}
+
+setup_storage_dir() {
+  local storage_fs alt candidates avail
+  storage_fs="$(df -T "$XP_DIR" | awk 'NR==2 {print $2}')"
+  candidates=()
+  if [[ "$storage_fs" == "btrfs" ]]; then
+    candidates+=(/var/tmp/go-legacy-winxp-xp-storage /tmp/go-legacy-winxp-xp-storage)
+  else
+    candidates+=("$XP_DIR/storage")
+  fi
+  for alt in "${candidates[@]}"; do
+    avail="$(df -BG "$(dirname "$alt")" | awk 'NR==2 {gsub(/G/,"",$4); print $4}')"
+    if [[ "${avail:-0}" -ge 12 ]]; then
+      mkdir -p "$alt"
+      export XP_STORAGE="$alt"
+      echo "using $alt for XP disk (${avail}G free on $(dirname "$alt"))"
+      return
+    fi
+  done
+  alt="${candidates[0]}"
+  mkdir -p "$alt"
+  export XP_STORAGE="$alt"
+  echo "warning: low disk space for XP storage, using $alt" >&2
 }
 
 has_xp_disk_image() {
@@ -57,21 +85,11 @@ rm -f "$RESULT" "$SHARED/smoke.out" "$SHARED/smoke-amd64.out"
 mkdir -p "$SHARED"
 : > "$SHARED/.keep"
 
-validate_xp_storage
+"$ROOT/scripts/fetch-xp-iso.sh"
 
-# Windows Setup is unreliable on btrfs-backed disks. Prefer ext4/xfs under /tmp.
-storage_fs="$(df -T "$XP_DIR" | awk 'NR==2 {print $2}')"
-if [[ "$storage_fs" == "btrfs" ]]; then
-  alt="/tmp/go-legacy-winxp-xp-storage"
-  mkdir -p "$alt"
-  if [[ -L "$XP_DIR/storage" || ! -e "$XP_DIR/storage" ]]; then
-    rm -rf "$XP_DIR/storage"
-    ln -sfn "$alt" "$XP_DIR/storage"
-    echo "using $alt for XP disk (project filesystem is $storage_fs)"
-  fi
-else
-  mkdir -p "$XP_DIR/storage"
-fi
+setup_storage_dir
+
+validate_xp_storage
 
 echo "starting Windows XP container (web UI on http://127.0.0.1:8006/)"
 echo "first boot downloads and installs XP then runs docker/xp/oem/install.bat"

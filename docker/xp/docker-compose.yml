@@ -1,6 +1,6 @@
 services:
   windows-xp:
-    image: dockurr/windows:3.23
+    image: dockurr/windows:6.04
     container_name: go-legacy-winxp-test
     privileged: true
     environment:
@@ -8,7 +8,7 @@ services:
       RAM_SIZE: "2G"
       CPU_CORES: "2"
       CPU_MODEL: "qemu64"
-      DISK_SIZE: "16G"
+      DISK_SIZE: "8G"
       USERNAME: "docker"
       PASSWORD: "admin"
       HV: "N"
@@ -22,7 +22,8 @@ services:
     ports:
       - "8006:8006"
     volumes:
-      - ./storage:/storage
+      - ${XP_STORAGE:-./storage}:/storage
       - ./oem:/oem
       - ./shared:/shared
+      - ./iso/xp-sp3.iso:/custom.iso
     stop_grace_period: 2m
