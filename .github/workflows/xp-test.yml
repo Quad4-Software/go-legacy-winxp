@@ -124,3 +124,14 @@ jobs:
         env:
           XP_TEST_TIMEOUT: "7200"
         run: ./scripts/test-xp-docker.sh
+
+      - name: Upload XP smoke artifacts
+        if: failure() && steps.kvm.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: xp-smoke-artifacts
+          path: |
+            docker/xp/shared/result.txt
+            docker/xp/shared/smoke.out
+            docker/xp/shared/smoke.exit
+          if-no-files-found: ignore

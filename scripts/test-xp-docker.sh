@@ -6,7 +6,55 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 XP_DIR="$ROOT/docker/xp"
 SHARED="$XP_DIR/shared"
 RESULT="$SHARED/result.txt"
+SMOKE_OUT="$SHARED/smoke.out"
+SMOKE_EXIT="$SHARED/smoke.exit"
 COMPOSE=(docker compose -f "$XP_DIR/docker-compose.yml")
+
+show_smoke_artifacts() {
+  if [[ -f "$SMOKE_OUT" ]]; then
+    echo "---- smoke.out ----"
+    cat "$SMOKE_OUT"
+    echo "-------------------"
+  else
+    echo "smoke.out not found at $SMOKE_OUT" >&2
+  fi
+  if [[ -f "$SMOKE_EXIT" ]]; then
+    echo "smoke.exit: $(tr -d '[:space:]' < "$SMOKE_EXIT")"
+  fi
+}
+
+validate_smoke_output() {
+  local status="$1"
+  local exit_code
+
+  if [[ ! -f "$SMOKE_OUT" ]]; then
+    echo "PASS reported but smoke.out is missing" >&2
+    return 1
+  fi
+
+  if ! grep -Fq "go-legacy-winxp smoke ok" "$SMOKE_OUT"; then
+    echo "smoke.out missing success marker (guest may have crashed)" >&2
+    return 1
+  fi
+
+  if ! grep -Fq "goarch=386" "$SMOKE_OUT"; then
+    echo "smoke.out missing goarch=386" >&2
+    return 1
+  fi
+
+  if [[ -f "$SMOKE_EXIT" ]]; then
+    exit_code="$(tr -d '[:space:]' < "$SMOKE_EXIT" || true)"
+    if [[ "$status" == "PASS" && "$exit_code" != "0" ]]; then
+      echo "PASS reported but smoke.exit is $exit_code" >&2
+      return 1
+    fi
+  elif [[ "$status" == "PASS" ]]; then
+    echo "PASS reported but smoke.exit is missing" >&2
+    return 1
+  fi
+
+  return 0
+}
 
 resolve_storage_dir() {
   local storage="$XP_DIR/storage"
@@ -81,7 +129,7 @@ fi
 
 "$ROOT/scripts/check-xp-pe.sh" "$XP_DIR/oem"
 
-rm -f "$RESULT" "$SHARED/smoke.out" "$SHARED/smoke-amd64.out"
+rm -f "$RESULT" "$SMOKE_OUT" "$SMOKE_EXIT" "$SHARED/smoke-amd64.out"
 rm -f "$XP_DIR/oem/xp-smoke-amd64.exe" "$SHARED/xp-smoke-amd64.exe"
 mkdir -p "$SHARED"
 : > "$SHARED/.keep"
@@ -109,14 +157,15 @@ while (( SECONDS < deadline )); do
     case "$status" in
       PASS|FAIL)
         echo "guest reported: $status"
-        if [[ -f "$SHARED/smoke.out" ]]; then
-          echo "---- smoke.out ----"
-          cat "$SHARED/smoke.out"
-          echo "-------------------"
-        fi
+        show_smoke_artifacts
         if [[ "$status" == "PASS" ]]; then
-          echo "Windows XP Docker smoke test passed"
-          exit 0
+          if validate_smoke_output "$status"; then
+            echo "Windows XP Docker smoke test passed"
+            exit 0
+          fi
+          echo "Windows XP Docker smoke test failed: output validation" >&2
+          "${COMPOSE[@]}" logs --no-color | tail -n 80 >&2 || true
+          exit 1
         fi
         echo "Windows XP Docker smoke test failed" >&2
         "${COMPOSE[@]}" logs --no-color | tail -n 80 >&2 || true
@@ -131,5 +180,6 @@ while (( SECONDS < deadline )); do
 done
 
 echo "timed out waiting for XP smoke result" >&2
+show_smoke_artifacts
 "${COMPOSE[@]}" logs --no-color | tail -n 120 >&2 || true
 exit 1

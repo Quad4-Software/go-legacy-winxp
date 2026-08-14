@@ -4,7 +4,9 @@ setlocal enableextensions
 set SHARE=
 set RESULT=
 set OUT=
+set EXITFILE=
 set STATUS=FAIL
+set EXITCODE=1
 
 echo go-legacy-winxp XP smoke starting > C:\OEM\started.txt
 
@@ -28,22 +30,27 @@ goto run_tests
 :share_ready
 set RESULT=%SHARE%\result.txt
 set OUT=%SHARE%\smoke.out
+set EXITFILE=%SHARE%\smoke.exit
 echo starting > "%RESULT%"
 
 :run_tests
 if not exist C:\OEM\xp-smoke-386.exe (
   echo missing C:\OEM\xp-smoke-386.exe > C:\OEM\smoke-386.out
+  set EXITCODE=1
   goto write_result
 )
 
 C:\OEM\xp-smoke-386.exe > C:\OEM\smoke-386.out 2>&1
-if errorlevel 1 goto write_result
+set EXITCODE=%ERRORLEVEL%
+if %EXITCODE% neq 0 goto write_result
 set STATUS=PASS
 
 :write_result
 if not "%SHARE%"=="" (
   echo %STATUS% > "%RESULT%"
+  echo %EXITCODE% > "%EXITFILE%"
   if exist C:\OEM\smoke-386.out copy /Y C:\OEM\smoke-386.out "%OUT%" >nul
+  if not exist C:\OEM\smoke-386.out echo no smoke output captured > "%OUT%"
 )
 
 REM Boot-time retest hook for cached disks.
