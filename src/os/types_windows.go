@@ -54,10 +54,11 @@ func newFileStatFromGetFileInformationByHandle(path string, h syscall.Handle) (f
 	if d.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		var ti windows.FILE_ATTRIBUTE_TAG_INFO
 		err = windows.GetFileInformationByHandleEx(h, windows.FileAttributeTagInfo, (*byte)(unsafe.Pointer(&ti)), uint32(unsafe.Sizeof(ti)))
-		if err != nil {
-			return nil, &PathError{Op: "GetFileInformationByHandleEx", Path: path, Err: err}
+		if err == nil {
+			reparseTag = ti.ReparseTag
 		}
-		reparseTag = ti.ReparseTag
+		// GetFileInformationByHandleEx is unavailable on Windows XP.
+		// Leave reparseTag as 0 and continue with the basic handle info.
 	}
 
 	return &fileStat{

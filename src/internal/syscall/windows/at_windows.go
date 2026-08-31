@@ -332,16 +332,19 @@ func deleteatFallback(h syscall.Handle) error {
 
 	var data syscall.ByHandleFileInformation
 	if err := syscall.GetFileInformationByHandle(h, &data); err == nil && data.FileAttributes&syscall.FILE_ATTRIBUTE_READONLY != 0 {
+		clearHandle := h
+		reopened := false
 		wh, err := ReOpenFile(h,
 			FILE_WRITE_ATTRIBUTES,
 			FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
 			syscall.FILE_FLAG_OPEN_REPARSE_POINT|syscall.FILE_FLAG_BACKUP_SEMANTICS,
 		)
-		if err != nil {
-			return err
+		if err == nil {
+			clearHandle = wh
+			reopened = true
 		}
 		err = NtSetInformationFile(
-			wh,
+			clearHandle,
 			&IO_STATUS_BLOCK{},
 			unsafe.Pointer(&fileBasicInformation{
 				FileAttributes: data.FileAttributes &^ FILE_ATTRIBUTE_READONLY,
@@ -349,7 +352,9 @@ func deleteatFallback(h syscall.Handle) error {
 			uint32(unsafe.Sizeof(fileBasicInformation{})),
 			fileBasicInformationClass,
 		)
-		syscall.CloseHandle(wh)
+		if reopened {
+			syscall.CloseHandle(wh)
+		}
 		if err != nil {
 			return err.(NTStatus).Errno()
 		}

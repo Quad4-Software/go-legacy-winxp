@@ -408,6 +408,9 @@ func GetOverlappedResult(handle syscall.Handle, overlapped *syscall.Overlapped, 
 }
 
 func GetTempPath2(buflen uint32, buf *uint16) (n uint32, err error) {
+	if err := procGetTempPath2W.Find(); err != nil {
+		return 0, syscall.EWINDOWS
+	}
 	r0, _, e1 := syscall.SyscallN(procGetTempPath2W.Addr(), uintptr(buflen), uintptr(unsafe.Pointer(buf)))
 	n = uint32(r0)
 	if n == 0 {
@@ -477,6 +480,9 @@ func MultiByteToWideChar(codePage uint32, dwFlags uint32, str *byte, nstr int32,
 }
 
 func ReOpenFile(filehandle syscall.Handle, desiredAccess uint32, shareMode uint32, flagAndAttributes uint32) (handle syscall.Handle, err error) {
+	if err := procReOpenFile.Find(); err != nil {
+		return syscall.InvalidHandle, ERROR_NOT_SUPPORTED
+	}
 	r0, _, e1 := syscall.SyscallN(procReOpenFile.Addr(), uintptr(filehandle), uintptr(desiredAccess), uintptr(shareMode), uintptr(flagAndAttributes))
 	handle = syscall.Handle(r0)
 	if handle == syscall.InvalidHandle {

@@ -144,10 +144,11 @@ func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []Di
 					// [1] https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/fa8194e0-53ec-413b-8315-e8fa85396fd8
 					break
 				}
-				if (err == windows.ERROR_INVALID_PARAMETER || err == windows.ERROR_NOT_SUPPORTED) &&
+				if (err == windows.ERROR_INVALID_PARAMETER || err == windows.ERROR_NOT_SUPPORTED || err == syscall.EWINDOWS) &&
 					(d.class == windows.FileFullDirectoryRestartInfo || d.class == windows.FileFullDirectoryInfo) {
 					// Even FileFullDirectoryRestartInfo is not supported by very old SMB shares.
 					// This is common with Windows 7 accessing SMB 1.0 shares.
+					// GetFileInformationByHandleEx is also missing on Windows XP (returns EWINDOWS).
 					// Use FindFirstFile/FindNextFile as the final fallback.
 					dirBufPool.Put(d.buf)
 					d.buf = nil

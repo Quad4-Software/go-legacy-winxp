@@ -66,10 +66,16 @@ These differ from win7 on purpose:
 
 - `src/cmd/link/internal/ld/pe.go` (PE major version 5)
 - `src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go`
+- `src/internal/runtime/syscall/windows/defs_windows.go`
 - `src/internal/syscall/windows/at_windows.go`
 - `src/internal/syscall/windows/syscall_windows.go`
+- `src/internal/syscall/windows/symlink_windows.go`
+- `src/internal/syscall/windows/types_windows.go`
 - `src/internal/syscall/windows/zsyscall_windows.go`
+- `src/net/fd_windows.go` (ignore unsupported UDP WSAIoctl on XP)
+- `src/os/dir_windows.go`
 - `src/os/file_windows.go`
+- `src/os/types_windows.go`
 - `src/runtime/netpoll_windows.go`
 - `src/runtime/os_windows.go`
 - `src/runtime/signal_windows.go`
