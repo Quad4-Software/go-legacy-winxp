@@ -162,18 +162,6 @@ index 81361c98..db275ae9 100644
  }
  
  func Renameat(olddirfd syscall.Handle, oldpath string, newdirfd syscall.Handle, newpath string) error {
-diff --git a/src/internal/syscall/windows/symlink_windows.go b/src/internal/syscall/windows/symlink_windows.go
-index b8249b38..ca5a92ea 100644
---- a/src/internal/syscall/windows/symlink_windows.go
-+++ b/src/internal/syscall/windows/symlink_windows.go
-@@ -20,6 +20,7 @@ const (
- 	FileStandardInfo               = 1    // FILE_STANDARD_INFO
- 	FileNameInfo                   = 2    // FILE_NAME_INFO
- 	FileDispositionInfo            = 4    // FILE_DISPOSITION_INFO
-+	FileEndOfFileInfo              = 6    // FILE_END_OF_FILE_INFO
- 	FileStreamInfo                 = 7    // FILE_STREAM_INFO
- 	FileCompressionInfo            = 8    // FILE_COMPRESSION_INFO
- 	FileAttributeTagInfo           = 9    // FILE_ATTRIBUTE_TAG_INFO
 diff --git a/src/internal/syscall/windows/syscall_windows.go b/src/internal/syscall/windows/syscall_windows.go
 index 9f3ea26c..aecc75a6 100644
 --- a/src/internal/syscall/windows/syscall_windows.go
@@ -189,6 +177,18 @@ index 9f3ea26c..aecc75a6 100644
  //sys	CreateEnvironmentBlock(block **uint16, token syscall.Token, inheritExisting bool) (err error) = userenv.CreateEnvironmentBlock
  //sys	DestroyEnvironmentBlock(block *uint16) (err error) = userenv.DestroyEnvironmentBlock
  //sys	CreateEvent(eventAttrs *SecurityAttributes, manualReset uint32, initialState uint32, name *uint16) (handle syscall.Handle, err error) = kernel32.CreateEventW
+diff --git a/src/internal/syscall/windows/symlink_windows.go b/src/internal/syscall/windows/symlink_windows.go
+index b8249b38..ca5a92ea 100644
+--- a/src/internal/syscall/windows/symlink_windows.go
++++ b/src/internal/syscall/windows/symlink_windows.go
+@@ -20,6 +20,7 @@ const (
+ 	FileStandardInfo               = 1    // FILE_STANDARD_INFO
+ 	FileNameInfo                   = 2    // FILE_NAME_INFO
+ 	FileDispositionInfo            = 4    // FILE_DISPOSITION_INFO
++	FileEndOfFileInfo              = 6    // FILE_END_OF_FILE_INFO
+ 	FileStreamInfo                 = 7    // FILE_STREAM_INFO
+ 	FileCompressionInfo            = 8    // FILE_COMPRESSION_INFO
+ 	FileAttributeTagInfo           = 9    // FILE_ATTRIBUTE_TAG_INFO
 diff --git a/src/internal/syscall/windows/types_windows.go b/src/internal/syscall/windows/types_windows.go
 index 21aeb8fa..0c9d36f0 100644
 --- a/src/internal/syscall/windows/types_windows.go

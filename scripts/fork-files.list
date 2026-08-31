@@ -1,0 +1,12 @@
+# Fork identity paths preserved across win7 sync.
+# Directories end with /. Comments and blank lines ignored.
+README.md
+AGENTS.md
+.github/workflows/go-build.yml
+.github/workflows/xp-test.yml
+.github/workflows/watch-upstream.yml
+patches/0010-Add-Windows-XP-support.patch
+scripts/
+docker/
+testdata/
+skills/

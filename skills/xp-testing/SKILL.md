@@ -91,4 +91,6 @@ These must not appear in the PE import table of XP smoke binaries (dynamic `GetP
 
 1. `./scripts/check-xp-pe.sh`
 2. If KVM available, `./scripts/test-xp-docker.sh`
-3. Regenerate `patches/0010-Add-Windows-XP-support.patch` if sources changed (see `skills/upstream-update/SKILL.md`)
+3. Regenerate patch 0010 against the matching win7 checkout:
+   `./scripts/regenerate-xp-patch.sh /tmp/go-legacy-win7`
+   (see `skills/upstream-update/SKILL.md`)

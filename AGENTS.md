@@ -24,16 +24,20 @@ Default branch is `master`.
 ## Layout that matters
 
 ```
-VERSION                 Go version string for this tree
-patches/                Ordered patch series (0001-0009 win7 lineage, 0010 XP)
-patches/0010-*.patch    Full XP delta versus current win7 base
-src/                    Go source (already patched in-tree)
-scripts/check-xp-pe.sh  Static PE 5.1 and forbidden-import checks
+VERSION                      Go version string for this tree
+patches/                     Ordered patch series (0001-0009 win7 lineage, 0010 XP)
+patches/0010-*.patch         Full XP delta versus current win7 base
+src/                         Go source (already patched in-tree)
+scripts/xp-files.list        XP sources preserved across sync
+scripts/fork-files.list      Fork identity paths preserved across sync
+scripts/scaffold-version.sh  Sync onto a win7 tag
+scripts/regenerate-xp-patch.sh
+scripts/check-xp-pe.sh       Static PE 5.1 and forbidden-import checks
 scripts/test-xp-docker.sh
-docker/xp/              dockurr/windows VERSION=xp smoke harness
-testdata/xp-smoke/      Guest smoke program
-.github/workflows/      Release build and XP test workflows
-skills/                 Task skills for maintenance agents
+docker/xp/                   dockurr/windows VERSION=xp smoke harness
+testdata/xp-smoke/           Guest smoke program
+.github/workflows/           Release, XP test, and upstream watch
+skills/                      Task skills for maintenance agents
 ```
 
 Build artifacts (`bin/`, `pkg/`, generated `z*.go`) are local. Do not commit them.
@@ -49,20 +53,13 @@ Build artifacts (`bin/`, `pkg/`, generated `z*.go`) are local. Do not commit the
 
 ## Fork identity files (always keep)
 
-- `README.md`
-- `.github/workflows/go-build.yml`
-- `.github/workflows/xp-test.yml`
-- `patches/0010-Add-Windows-XP-support.patch`
-- `scripts/check-xp-pe.sh`
-- `scripts/test-xp-docker.sh`
-- `docker/xp/**`
-- `testdata/xp-smoke/**`
-- `AGENTS.md`
-- `skills/**`
+Authoritative list: `scripts/fork-files.list` (dirs and files preserved by scaffold).
+
+Includes README, AGENTS.md, workflows (`go-build`, `xp-test`, `watch-upstream`), `patches/0010`, `scripts/`, `docker/`, `testdata/`, and `skills/`.
 
 ## XP source files (must survive upstream sync)
 
-These differ from win7 on purpose:
+Authoritative list: `scripts/xp-files.list`. Summary:
 
 - `src/cmd/link/internal/ld/pe.go` (PE major version 5)
 - `src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go`
@@ -93,6 +90,18 @@ Read and follow these before the matching task:
 | [skills/xp-testing/SKILL.md](skills/xp-testing/SKILL.md) | Validate XP PE target, imports, or run Docker XP smoke tests |
 
 ## Common commands
+
+Sync onto a win7 tag (preserves XP + fork identity, regenerates `0010`):
+
+```bash
+./scripts/scaffold-version.sh v1.27.0-2
+```
+
+Regenerate XP patch only (needs matching win7 checkout):
+
+```bash
+./scripts/regenerate-xp-patch.sh /tmp/go-legacy-win7
+```
 
 Bootstrap toolchain (needs a host Go for bootstrap):
 
@@ -135,6 +144,8 @@ Expect PE OS and subsystem **5.1** for XP-compatible binaries.
 ## Releases
 
 `.github/workflows/go-build.yml` is `workflow_dispatch` with a version input. It builds matrix targets and publishes draft GitHub releases. Prefer release branch `release-branch.goX.Y` when present, else `master`.
+
+`.github/workflows/watch-upstream.yml` runs daily and on `workflow_dispatch`. It opens an `upstream-sync` issue when a newer `thongtech/go-legacy-win7` tag (`vX.Y.Z-N`) appears.
 
 ## Do not
 

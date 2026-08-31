@@ -10,11 +10,11 @@ description: >-
 
 ## Goal
 
-Move this tree to a newer [go-legacy-win7](https://github.com/thongtech/go-legacy-win7) tag (example `v1.26.5-1`) **without losing XP patches**.
+Move this tree to a newer [go-legacy-win7](https://github.com/thongtech/go-legacy-win7) tag (example `v1.27.0-2`) **without losing XP patches**.
 
 ## Preconditions
 
-- Working tree clean or changes stashed intentionally
+- Working tree clean (or pass `--force` to scaffold)
 - Remotes present:
 
 ```bash
@@ -23,81 +23,51 @@ git remote -v
 # upstream -> https://github.com/thongtech/go-legacy-win7.git
 ```
 
-Add upstream if missing:
+`scripts/scaffold-version.sh` adds `upstream` if missing.
 
-```bash
-git remote add upstream https://github.com/thongtech/go-legacy-win7.git
-```
+- Pick the win7 tag (`git ls-remote --tags upstream 'v1.*'`).
+  Scheduled workflow `.github/workflows/watch-upstream.yml` opens an issue when a newer tag appears.
 
-- Pick the win7 tag that matches the desired Go version (`git ls-remote --tags upstream 'v1.*'`).
-
-## Safe sync procedure
+## Sync (preferred)
 
 Do **not** `git merge` stock golang/go into this repo.
 
-### 1. Preserve XP and fork files
-
-Copy aside before replacing the tree:
-
-- All XP sources listed in `AGENTS.md`
-- `README.md`
-- `.github/workflows/go-build.yml`
-- `.github/workflows/xp-test.yml`
-- `patches/0010-Add-Windows-XP-support.patch`
-- `scripts/`
-- `docker/`
-- `testdata/xp-smoke/`
-- `AGENTS.md`
-- `skills/`
-
-### 2. Check out upstream win7 tag into a temp clone
-
 ```bash
-TAG=v1.26.5-1   # change as needed
-rm -rf /tmp/go-legacy-win7
-git clone https://github.com/thongtech/go-legacy-win7.git /tmp/go-legacy-win7
-git -C /tmp/go-legacy-win7 checkout "$TAG"
+./scripts/scaffold-version.sh v1.27.0-2
 ```
 
-Confirm `/tmp/go-legacy-win7/VERSION` is the expected `go1.x.y`.
+Flags:
 
-### 3. Replace tree contents from win7 (keep `.git`)
+- `--work-dir DIR`  win7 checkout path (default `/tmp/go-legacy-win7`)
+- `--skip-build`    skip `src/make.bash`
+- `--skip-pe`       skip `scripts/check-xp-pe.sh`
+- `--force`         allow dirty worktree
 
-From the repo root:
+What it does:
+
+1. Preserves XP sources from `scripts/xp-files.list` and fork paths from `scripts/fork-files.list`
+2. Checks out the win7 tag into the work dir
+3. Rsyncs win7 into this tree (keeps `.git`, excludes fork dirs)
+4. Restores preserved XP + fork identity
+5. Regenerates `patches/0010-Add-Windows-XP-support.patch` via `scripts/regenerate-xp-patch.sh`
+6. Builds and runs PE checks unless skipped
+
+Does not commit or push.
+
+## Regenerate patch only
+
+If the tree is already on the right win7 base and only `0010` is stale:
 
 ```bash
-rsync -a --delete \
-  --exclude='.git' \
-  --exclude='bin' \
-  --exclude='pkg' \
-  --exclude='AGENTS.md' \
-  --exclude='skills' \
-  --exclude='scripts' \
-  --exclude='docker' \
-  --exclude='testdata' \
-  /tmp/go-legacy-win7/ ./
+./scripts/regenerate-xp-patch.sh /tmp/go-legacy-win7
 ```
 
-If you excluded less, restore the preserve list from step 1 afterward.
+The argument must be a checkout of the matching win7 tag.
 
-### 4. Restore XP sources and fork identity
-
-Copy the preserved XP sources and fork files back on top of the win7 tree.
-
-Conflict check: if official or win7 changes touched an XP file (rare on point releases), merge carefully. Prefer keeping dynamic-load XP behavior.
-
-### 5. Regenerate patch 0010
-
-Diff current XP files against the win7 tag checkout and rewrite `patches/0010-Add-Windows-XP-support.patch` so it applies cleanly to that win7 base. Include every XP file from `AGENTS.md`, not only the historical subset.
-
-Also accept updated win7 patches under `patches/0001` through `patches/0009` from upstream.
-
-### 6. Verify
+## Verify
 
 ```bash
 cat VERSION
-cd src && ./make.bash
-cd ..
 ./bin/go version
 ./scripts/check-xp-pe.sh
 ```
@@ -108,27 +78,27 @@ Optional live XP (needs Docker + `/dev/kvm`):
 ./scripts/test-xp-docker.sh
 ```
 
-### 7. Diff sanity
+Sanity:
 
 ```bash
-# XP files must still differ from win7
 diff -u /tmp/go-legacy-win7/src/runtime/os_windows.go src/runtime/os_windows.go | head
-# Fork branding intact
 grep -n 'go-legacy-winxp\|branch=master' README.md .github/workflows/go-build.yml
 ```
 
 ## Notes
 
-- Point releases often change `os/root_*.go` and similar. Those usually do **not** conflict with XP files. Still check `git diff --stat` after restore.
-- Patch `0006` (removeall_noat) is often refreshed by win7 when `os.Root` changes. Take upstream's version.
+- Point releases often change `os/root_*.go` and similar. Those usually do **not** conflict with XP files. Still check `git diff --stat` after scaffold.
+- Patch `0006` (removeall_noat) is often refreshed by win7 when `os.Root` changes. Take upstream's version (scaffold keeps win7 `0001`-`0009`).
 - Do not commit `bin/`, `pkg/`, or `docker/xp/storage`.
 - Commit only when the user asks.
+- File lists are authoritative: `scripts/xp-files.list` and `scripts/fork-files.list`.
 
 ## Failure modes
 
 | Symptom | Fix |
 |---------|-----|
-| PE target is 6.1 again | `pe.go` lost XP restore |
-| Forbidden Vista+ static imports | `os_windows.go` / vendor zsyscall lost dynamic load |
-| README says go-legacy-win7 | Fork identity not restored |
+| PE target is 6.1 again | XP restore missed `pe.go` check `xp-files.list` |
+| Forbidden Vista+ static imports | XP restore missed runtime/zsyscall dynamic load |
+| README says go-legacy-win7 | Fork identity not restored check `fork-files.list` |
 | Workflow falls back to `main` | Restored wrong `go-build.yml` |
+| Dirty tree refused | Stash/commit or pass `--force` |

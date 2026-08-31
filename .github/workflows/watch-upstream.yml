@@ -1,0 +1,140 @@
+name: Watch Upstream
+
+on:
+  schedule:
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure upstream-sync label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create upstream-sync \
+            --description "New go-legacy-win7 tag available to sync" \
+            --color "0E8A16" \
+            --force
+
+      - name: Detect newer win7 tag
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          UPSTREAM_URL="https://github.com/thongtech/go-legacy-win7.git"
+
+          newest="$(
+            git ls-remote --tags "$UPSTREAM_URL" 'v1.*' \
+              | awk '{print $2}' \
+              | sed 's|refs/tags/||;s|\^{}||' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' \
+              | sort -u -V \
+              | tail -1
+          )"
+          if [[ -z "$newest" ]]; then
+            echo "no upstream vX.Y.Z-N tags found" >&2
+            exit 1
+          fi
+          echo "newest_upstream=$newest" >> "$GITHUB_OUTPUT"
+          echo "Newest upstream tag: $newest"
+
+          our_newest="$(
+            git tag -l 'v*.*.*-*' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' \
+              | sort -u -V \
+              | tail -1
+          )"
+          echo "our_newest=${our_newest:-none}" >> "$GITHUB_OUTPUT"
+          echo "Newest local fork tag: ${our_newest:-none}"
+
+          version_go="$(head -n1 VERSION | tr -d '[:space:]')"
+          echo "version_file=$version_go" >> "$GITHUB_OUTPUT"
+          echo "VERSION file: $version_go"
+
+          newer=false
+          if [[ -z "$our_newest" ]]; then
+            newer=true
+          else
+            last="$(printf '%s\n%s\n' "${our_newest#v}" "${newest#v}" | sort -V | tail -1)"
+            if [[ "$last" == "${newest#v}" && "${our_newest#v}" != "${newest#v}" ]]; then
+              newer=true
+            fi
+          fi
+
+          tag_go="${newest#v}"
+          tag_go="${tag_go%-*}"
+          ver_num="${version_go#go}"
+          if [[ -n "$ver_num" && -n "$tag_go" ]]; then
+            last_go="$(printf '%s\n%s\n' "$ver_num" "$tag_go" | sort -V | tail -1)"
+            if [[ "$last_go" == "$tag_go" && "$ver_num" != "$tag_go" ]]; then
+              newer=true
+            fi
+          fi
+
+          echo "newer=$newer" >> "$GITHUB_OUTPUT"
+          if [[ "$newer" != "true" ]]; then
+            echo "Already up to date with $newest"
+          fi
+
+      - name: Open issue if needed
+        if: steps.detect.outputs.newer == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEWEST: ${{ steps.detect.outputs.newest_upstream }}
+          OUR_NEWEST: ${{ steps.detect.outputs.our_newest }}
+          VERSION_FILE: ${{ steps.detect.outputs.version_file }}
+        run: |
+          set -euo pipefail
+          title="Upstream win7 tag available: ${NEWEST}"
+          release_ver="${NEWEST#v}"
+
+          existing="$(
+            gh issue list --state open --label upstream-sync --json number,title \
+              --jq ".[] | select(.title == \"$title\") | .number" \
+              | head -1
+          )"
+          if [[ -n "$existing" ]]; then
+            echo "Open issue #$existing already exists for $NEWEST"
+            exit 0
+          fi
+
+          body_file="$(mktemp)"
+          {
+            echo "A newer [go-legacy-win7](https://github.com/thongtech/go-legacy-win7) tag is available."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Upstream tag | \`${NEWEST}\` |"
+            echo "| This repo newest tag | \`${OUR_NEWEST}\` |"
+            echo "| \`VERSION\` | \`${VERSION_FILE}\` |"
+            echo
+            echo "## Checklist"
+            echo
+            echo "- [ ] \`./scripts/scaffold-version.sh ${NEWEST}\`"
+            echo "- [ ] Review diff (XP sources + fork identity intact)"
+            echo "- [ ] \`./scripts/check-xp-pe.sh\` (run by scaffold unless skipped)"
+            echo "- [ ] Optional: \`./scripts/test-xp-docker.sh\`"
+            echo "- [ ] Commit and push"
+            echo "- [ ] Release via \`go-build.yml\` workflow_dispatch (version input without \`v\`, e.g. \`${release_ver}\`)"
+            echo
+            echo "See \`skills/upstream-update/SKILL.md\` and \`AGENTS.md\`."
+          } >"$body_file"
+
+          gh issue create \
+            --title "$title" \
+            --label upstream-sync \
+            --body-file "$body_file"
+
+          echo "Opened issue for $NEWEST"
