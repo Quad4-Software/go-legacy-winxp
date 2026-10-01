@@ -56,7 +56,7 @@ Build artifacts (`bin/`, `pkg/`, generated `z*.go`) are local. Do not commit the
 
 Authoritative list: `scripts/fork-files.list` (dirs and files preserved by scaffold).
 
-Includes README, AGENTS.md, workflows (`ci`, `go-build`, `xp-test`, `watch-upstream`), `patches/0010`, `scripts/`, `docker/`, `testdata/`, and `skills/`.
+Includes README, AGENTS.md, workflows (`ci`, `go-build`, `xp-test`, `watch-upstream`), `patches/0010`, `scripts/`, `docker/`, `testdata/`, `docs/`, and `skills/`.
 
 ## XP source files (must survive upstream sync)
 

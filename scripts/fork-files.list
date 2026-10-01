@@ -12,4 +12,5 @@ patches/0010-Add-Windows-XP-support.patch
 scripts/
 docker/
 testdata/
+docs/
 skills/

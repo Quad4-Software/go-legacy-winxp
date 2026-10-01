@@ -6,6 +6,12 @@
 
 LLMs are used to maintain and verify this repository: Cursor (Grok 4.6 / Grok 4.7). Changes are also verified by a human.
 
+## Verified on Windows XP
+
+Windows XP SP3 running `reticulum-go --version` and `testdata/xp-hello`, plus the 32-check smoke, all built with this toolchain for `windows/386` (PE 5.1):
+
+![Windows XP running reticulum-go and a Go test program](docs/xp-guest-reticulum-go.png)
+
 ![Gopher image](https://golang.org/doc/gopher/fiveyears.jpg)
 _Gopher image by [Renee French][rf], licensed under [Creative Commons 4.0 Attribution licence][cc4-by]._
 
