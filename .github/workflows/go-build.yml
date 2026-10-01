@@ -161,9 +161,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.host.outputs.version }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: |
           set -euo pipefail
           ls -lh dist
+          git config user.name "${GIT_COMMITTER_NAME}"
+          git config user.email "${GIT_COMMITTER_EMAIL}"
+          git fetch --tags origin
           tag="v${VERSION}"
           if ! git rev-parse "$tag" >/dev/null 2>&1; then
             git tag -a "$tag" -m "go-legacy-winxp-${VERSION}"
