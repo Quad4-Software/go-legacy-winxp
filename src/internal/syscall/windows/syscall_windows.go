@@ -424,8 +424,19 @@ func ErrorLoadingGetFinalPathNameByHandle() error {
 //sys	CreateEnvironmentBlock(block **uint16, token syscall.Token, inheritExisting bool) (err error) = userenv.CreateEnvironmentBlock
 //sys	DestroyEnvironmentBlock(block *uint16) (err error) = userenv.DestroyEnvironmentBlock
 //sys	CreateEvent(eventAttrs *SecurityAttributes, manualReset uint32, initialState uint32, name *uint16) (handle syscall.Handle, err error) = kernel32.CreateEventW
+//sys	SetEvent(event syscall.Handle) (err error) = kernel32.SetEvent
+//sys	WaitForMultipleObjects(count uint32, handles *syscall.Handle, waitAll bool, waitMilliseconds uint32) (event uint32, err error) [failretval==0xffffffff] = kernel32.WaitForMultipleObjects
 
+//sys	ProcessPrng(buf []byte) (err error) = bcryptprimitives.ProcessPrng
+
+// RtlGenRandom is the generator used before ProcessPrng existed. It is not
+// listed in advapi32.dll under that name and has to be requested as
+// SystemFunction036.
 //sys	RtlGenRandom(buf []byte) (err error) = advapi32.SystemFunction036
+
+func ErrorLoadingProcessPrng() error {
+	return procProcessPrng.Find()
+}
 
 type FILE_ID_BOTH_DIR_INFO struct {
 	NextEntryOffset uint32
@@ -566,6 +577,15 @@ const (
 	STATUS_INVALID_PARAMETER         NTStatus = 0xC000000D
 	STATUS_INVALID_INFO_CLASS        NTStatus = 0xC0000003
 	STATUS_ACCESS_DENIED             NTStatus = 0xC0000022
+	STATUS_NO_SUCH_FILE              NTStatus = 0xC000000F
+	STATUS_NO_MORE_FILES             NTStatus = 0x80000006
+)
+
+// NtQueryDirectoryFile FileInformationClass values used by the
+// GetFileInformationByHandleEx fallback on kernels that lack that API.
+const (
+	fileFullDirectoryInformation   = 2
+	fileIdBothDirectoryInformation = 37
 )
 
 const (
@@ -576,6 +596,8 @@ const (
 type FILE_MODE_INFORMATION struct {
 	Mode uint32
 }
+
+//sys	IsProcessorFeaturePresent(ProcessorFeature uint32) (ret bool) = kernel32.IsProcessorFeaturePresent
 
 // NT Native APIs
 //sys   NtCreateFile(handle *syscall.Handle, access uint32, oa *OBJECT_ATTRIBUTES, iosb *IO_STATUS_BLOCK, allocationSize *int64, attributes uint32, share uint32, disposition uint32, options uint32, eabuffer unsafe.Pointer, ealength uint32) (ntstatus error) = ntdll.NtCreateFile

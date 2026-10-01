@@ -59,9 +59,18 @@ func (d *dirInfo) close() {
 // Useful for testing purposes.
 var allowReadDirFileID = true
 
+// fileFullDirInfoUnsupported starts every directory on
+// FileIdBothDirectoryRestartInfo, as readdir does for one directory once the
+// kernel has rejected FileFullDirectoryRestartInfo. Useful for testing
+// purposes.
+var fileFullDirInfoUnsupported = false
+
 func (d *dirInfo) init(h syscall.Handle) {
 	d.h = h
 	d.class = windows.FileFullDirectoryRestartInfo
+	if fileFullDirInfoUnsupported {
+		d.class = windows.FileIdBothDirectoryRestartInfo
+	}
 	// The previous settings are enough to read the directory entries.
 	// The following code is only needed to support os.SameFile.
 
@@ -131,6 +140,27 @@ func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []Di
 					d.buf = nil
 					break
 				}
+				if err == syscall.EWINDOWS || err == windows.ERROR_NOT_SUPPORTED {
+					// GetFileInformationByHandleEx is missing on Windows XP.
+					dirBufPool.Put(d.buf)
+					d.buf = nil
+					return readDirFindFirstFile(file, n, wantAll, mode)
+				}
+				if err == windows.ERROR_INVALID_PARAMETER && d.class == windows.FileFullDirectoryRestartInfo {
+					// This kernel does not know FILE_FULL_DIR_INFO, which
+					// every Windows before 8 lacks. Read this directory
+					// with the class it does know, which carries every
+					// field readdir uses.
+					d.class = windows.FileIdBothDirectoryRestartInfo
+					continue
+				}
+				if err == windows.ERROR_INVALID_PARAMETER &&
+					(d.class == windows.FileIdBothDirectoryRestartInfo || d.class == windows.FileIdBothDirectoryInfo) {
+					// Even FileIdBothDirectoryRestartInfo is rejected on very old SMB shares.
+					dirBufPool.Put(d.buf)
+					d.buf = nil
+					return readDirFindFirstFile(file, n, wantAll, mode)
+				}
 				if err == syscall.ERROR_FILE_NOT_FOUND &&
 					(d.class == windows.FileIdBothDirectoryRestartInfo || d.class == windows.FileFullDirectoryRestartInfo) {
 					// GetFileInformationByHandleEx doesn't document the return error codes when the info class is FileIdBothDirectoryRestartInfo,
@@ -143,16 +173,6 @@ func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []Di
 					// See go.dev/issue/61159.
 					// [1] https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/fa8194e0-53ec-413b-8315-e8fa85396fd8
 					break
-				}
-				if (err == windows.ERROR_INVALID_PARAMETER || err == windows.ERROR_NOT_SUPPORTED || err == syscall.EWINDOWS) &&
-					(d.class == windows.FileFullDirectoryRestartInfo || d.class == windows.FileFullDirectoryInfo) {
-					// Even FileFullDirectoryRestartInfo is not supported by very old SMB shares.
-					// This is common with Windows 7 accessing SMB 1.0 shares.
-					// GetFileInformationByHandleEx is also missing on Windows XP (returns EWINDOWS).
-					// Use FindFirstFile/FindNextFile as the final fallback.
-					dirBufPool.Put(d.buf)
-					d.buf = nil
-					return readDirFindFirstFile(file, n, wantAll, mode)
 				}
 				if s, _ := file.Stat(); s != nil && !s.IsDir() {
 					err = &PathError{Op: "readdir", Path: file.name, Err: syscall.ENOTDIR}
@@ -226,13 +246,11 @@ func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []Di
 	return names, dirents, infos, nil
 }
 
-// readDirFindFirstFile is a fallback for very old SMB shares that don't support
-// GetFileInformationByHandleEx with any directory info class.
-// It uses the legacy FindFirstFile/FindNextFile API.
+// readDirFindFirstFile is a fallback for Windows XP and old SMB shares that
+// do not support GetFileInformationByHandleEx with any directory info class.
 func readDirFindFirstFile(file *File, n int, wantAll bool, mode readdirMode) (names []string, dirents []DirEntry, infos []FileInfo, err error) {
 	d := file.dirinfo.Load()
 
-	// Build the search pattern
 	searchPath := file.name
 	if searchPath == "" {
 		return nil, nil, nil, &PathError{Op: "readdir", Path: file.name, Err: syscall.EINVAL}
@@ -251,7 +269,9 @@ func readDirFindFirstFile(file *File, n int, wantAll bool, mode readdirMode) (na
 	h, err := syscall.FindFirstFile(searchPathPtr, &fd)
 	if err != nil {
 		if err == syscall.ERROR_FILE_NOT_FOUND {
-			// Empty directory
+			if !winPathIsAbs(file.name) {
+				return nil, nil, nil, &PathError{Op: "FindFirstFile", Path: file.name, Err: err}
+			}
 			return nil, nil, nil, nil
 		}
 		return nil, nil, nil, &PathError{Op: "FindFirstFile", Path: file.name, Err: err}
@@ -260,8 +280,6 @@ func readDirFindFirstFile(file *File, n int, wantAll bool, mode readdirMode) (na
 
 	for {
 		name := syscall.UTF16ToString(fd.FileName[:])
-
-		// Skip "." and ".."
 		if name == "." || name == ".." {
 			if err = syscall.FindNextFile(h, &fd); err != nil {
 				if err == syscall.ERROR_NO_MORE_FILES {
@@ -275,15 +293,14 @@ func readDirFindFirstFile(file *File, n int, wantAll bool, mode readdirMode) (na
 		if mode == readdirName {
 			names = append(names, name)
 		} else {
-			// Convert Win32finddata to FileInfo
 			f := newFileStatFromWin32finddata(&fd)
 			f.name = name
-			f.vol = d.vol
-			if d.path != "" {
-				// Set the directory path for os.SameFile support.
-				// The entry name will be appended when needed.
-				f.appendNameToPath = true
-				f.path = d.path
+			if d != nil {
+				f.vol = d.vol
+				if d.path != "" {
+					f.appendNameToPath = true
+					f.path = d.path
+				}
 			}
 			if mode == readdirDirEntry {
 				dirents = append(dirents, dirEntry{f})
@@ -322,4 +339,14 @@ func (de dirEntry) Info() (FileInfo, error) { return de.fs, nil }
 
 func (de dirEntry) String() string {
 	return fs.FormatDirEntry(de)
+}
+
+func winPathIsAbs(p string) bool {
+	if p == "" {
+		return false
+	}
+	if p[0] == '\\' || p[0] == '/' {
+		return true
+	}
+	return len(p) >= 2 && p[1] == ':'
 }

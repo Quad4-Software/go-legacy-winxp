@@ -23,36 +23,66 @@ var (
 	ioSync  uint64
 )
 
-// This package uses the SetFileCompletionNotificationModes Windows
-// API to skip calling GetQueuedCompletionStatus if an IO operation
-// completes synchronously. There is a known bug where
-// SetFileCompletionNotificationModes crashes on some systems (see
-// https://support.microsoft.com/kb/2568167 for details).
+var hasCancelIoEx = sync.OnceValue(func() bool {
+	return syscall.LoadCancelIoEx() == nil
+})
 
-var socketCanUseSetFileCompletionNotificationModes bool // determines is SetFileCompletionNotificationModes is present and sockets can safely use it
-
-// checkSetFileCompletionNotificationModes verifies that
-// SetFileCompletionNotificationModes Windows API is present
-// on the system and is safe to use.
+// ifsHandlesOnly returns true if the system only has IFS handles for TCP sockets.
 // See https://support.microsoft.com/kb/2568167 for details.
-func checkSetFileCompletionNotificationModes() {
-	err := syscall.LoadSetFileCompletionNotificationModes()
-	if err != nil {
-		return
-	}
+var ifsHandlesOnly = sync.OnceValue(func() bool {
 	protos := [2]int32{syscall.IPPROTO_TCP, 0}
 	var buf [32]syscall.WSAProtocolInfo
 	len := uint32(unsafe.Sizeof(buf))
 	n, err := syscall.WSAEnumProtocols(&protos[0], &buf[0], &len)
 	if err != nil {
-		return
+		return false
 	}
-	for i := int32(0); i < n; i++ {
+	for i := range n {
 		if buf[i].ServiceFlags1&syscall.XP1_IFS_HANDLES == 0 {
-			return
+			return false
 		}
 	}
-	socketCanUseSetFileCompletionNotificationModes = true
+	return true
+})
+
+// truncatedRecvSkipsCompletion reports whether this kernel skips the completion
+// packet for a receive that goes pending and then truncates, which Windows 7
+// does although FILE_SKIP_COMPLETION_PORT_ON_SUCCESS permits skipping only for
+// an operation that completed synchronously. This is a version check because
+// the behaviour can only be observed by waiting out a packet that never comes.
+var truncatedRecvSkipsCompletion = sync.OnceValue(func() bool {
+	major, minor, _ := windows.Version()
+	return major < 6 || (major == 6 && minor < 2)
+})
+
+// isStreamSocket reports whether h is a stream socket, on which a receive
+// cannot truncate, because a short read there is an ordinary success.
+func isStreamSocket(h syscall.Handle) bool {
+	typ, err := syscall.GetsockoptInt(h, syscall.SOL_SOCKET, windows.SO_TYPE)
+	return err == nil && typ == syscall.SOCK_STREAM
+}
+
+// canSkipCompletionPortOnSuccess returns true if we use FILE_SKIP_COMPLETION_PORT_ON_SUCCESS for the given handle.
+// See https://support.microsoft.com/kb/2568167 for details.
+func canSkipCompletionPortOnSuccess(h syscall.Handle, isSocket bool) bool {
+	if !isSocket {
+		// Non-socket handles can use SetFileCompletionNotificationModes without problems.
+		return true
+	}
+	if truncatedRecvSkipsCompletion() && !isStreamSocket(h) {
+		// See the comment on truncatedRecvSkipsCompletion.
+		return false
+	}
+	if ifsHandlesOnly() {
+		// If the system only has IFS handles for TCP sockets, then there is nothing else to check.
+		return true
+	}
+	var info syscall.WSAProtocolInfo
+	size := int32(unsafe.Sizeof(info))
+	if syscall.Getsockopt(h, syscall.SOL_SOCKET, windows.SO_PROTOCOL_INFOW, (*byte)(unsafe.Pointer(&info)), &size) != nil {
+		return false
+	}
+	return info.ServiceFlags1&syscall.XP1_IFS_HANDLES != 0
 }
 
 // InitWSA initiates the use of the Winsock DLL by the current process.
@@ -64,7 +94,6 @@ var InitWSA = sync.OnceFunc(func() {
 	if e != nil {
 		initErr = e
 	}
-	checkSetFileCompletionNotificationModes()
 })
 
 // operation contains superset of data necessary to perform all async IO.
@@ -76,6 +105,11 @@ type operation struct {
 	// fields used by runtime.netpoll
 	runtimeCtx uintptr
 	mode       int32
+}
+
+func (o *operation) setOffset(off int64) {
+	o.o.OffsetHigh = uint32(off >> 32)
+	o.o.Offset = uint32(off)
 }
 
 func (fd *FD) overlapped(o *operation) *syscall.Overlapped {
@@ -153,7 +187,6 @@ func newWSAMsg(p []byte, oob []byte, flags int, rsa *wsaRsa) *windows.WSAMsg {
 	// The returned object can't be allocated in the stack because it is accessed asynchronously
 	// by Windows in between several system calls. If the stack frame is moved while that happens,
 	// then Windows may access invalid memory.
-	// TODO(qmuntal): investigate using runtime.Pinner keeping this path allocation-free.
 
 	// Use a pool to reuse allocations.
 	msg := wsaMsgPool.Get().(*windows.WSAMsg)
@@ -212,109 +245,103 @@ var operationPool = sync.Pool{
 	},
 }
 
-// waitIO waits for the IO operation o to complete.
+// waitIO waits for the IO operation to complete,
+// handling cancellation if necessary.
 func (fd *FD) waitIO(o *operation) error {
-	if fd.isBlocking {
-		panic("can't wait on blocking operations")
-	}
-	if !fd.pollable() {
-		// The overlapped handle is not added to the runtime poller,
-		// the only way to wait for the IO to complete is block until
-		// the overlapped event is signaled.
-		_, err := syscall.WaitForSingleObject(o.o.HEvent, syscall.INFINITE)
-		return err
+	if o.o.HEvent != 0 {
+		// The overlapped handle is not added to the runtime poller, so the
+		// operation reports itself through the event in its OVERLAPPED, and
+		// the deadline, where fd keeps one, is applied here.
+		return fd.waitEventIO(o)
 	}
 	// Wait for our request to complete.
 	err := fd.pd.wait(int(o.mode), fd.isFile)
 	switch err {
-	case nil, ErrNetClosing, ErrFileClosing, ErrDeadlineExceeded:
-		// No other error is expected.
+	case nil:
+		// IO completed successfully.
+	case ErrNetClosing, ErrFileClosing, ErrDeadlineExceeded:
+		// IO interrupted by "close" or "timeout", cancel our request.
+		// ERROR_NOT_FOUND can be returned when the request succeded
+		// between the time wait returned and CancelIoEx was executed.
+		if err := syscall.CancelIoEx(fd.Sysfd, &o.o); err != nil && err != syscall.ERROR_NOT_FOUND {
+			if hasCancelIoEx() {
+				panic(err)
+			}
+		}
+		fd.pd.waitCanceled(int(o.mode))
 	default:
+		// No other error is expected.
 		panic("unexpected runtime.netpoll error: " + err.Error())
 	}
 	return err
 }
 
-// cancelIO cancels the IO operation o and waits for it to complete.
-func (fd *FD) cancelIO(o *operation) {
-	if !fd.pollable() {
-		return
-	}
-	// Cancel our request.
-	err := syscall.CancelIoEx(fd.Sysfd, &o.o)
-	// Assuming ERROR_NOT_FOUND is returned, if IO is completed.
-	if err != nil && err != syscall.ERROR_NOT_FOUND {
-		// TODO(brainman): maybe do something else, but panic.
-		panic(err)
-	}
-	fd.pd.waitCanceled(int(o.mode))
-}
-
-// pin pins ptr for the duration of the IO operation.
-// If fd is in blocking mode, pin does nothing.
-func (fd *FD) pin(mode int, ptr any) {
-	if fd.isBlocking {
-		return
-	}
-	if mode == 'r' {
-		fd.readPinner.Pin(ptr)
-	} else {
-		fd.writePinner.Pin(ptr)
-	}
-}
-
 // execIO executes a single IO operation o.
 // It supports both synchronous and asynchronous IO.
-func (fd *FD) execIO(mode int, submit func(o *operation) (uint32, error)) (int, error) {
-	if mode == 'r' {
-		defer fd.readPinner.Unpin()
-	} else {
-		defer fd.writePinner.Unpin()
-	}
+// pinPtrs is a list of pointers that will be pinned to a fixed location in memory
+// during the lifetime of the operation.
+func (fd *FD) execIO(
+	mode int,
+	submit func(o *operation) (uint32, error),
+	pinPtrs ...any,
+) (int, error) {
 	// Notify runtime netpoll about starting IO.
 	err := fd.pd.prepare(mode, fd.isFile)
 	if err != nil {
 		return 0, err
 	}
+	if fd.keepsOwnDeadlines() {
+		if _, passed := fd.deadlineTimeout(mode); passed {
+			return 0, ErrDeadlineExceeded
+		}
+	}
 	o := operationPool.Get().(*operation)
 	defer operationPool.Put(o)
 	*o = operation{
-		o: syscall.Overlapped{
-			OffsetHigh: uint32(fd.offset >> 32),
-			Offset:     uint32(fd.offset),
-		},
 		runtimeCtx: fd.pd.runtimeCtx,
 		mode:       int32(mode),
 	}
-	// Start IO.
-	if !fd.isBlocking && !fd.pollable() {
-		// If the handle is opened for overlapped IO but we can't
-		// use the runtime poller, then we need to use an
-		// event to wait for the IO to complete.
-		h, err := windows.CreateEvent(nil, 0, 0, nil)
-		if err != nil {
-			// This shouldn't happen when all CreateEvent arguments are zero.
-			panic(err)
+	o.setOffset(fd.offset)
+	if !fd.isBlocking {
+		var pinner *runtime.Pinner
+		if mode == 'r' {
+			pinner = &fd.readPinner
+		} else {
+			pinner = &fd.writePinner
 		}
-		// Set the low bit so that the external IOCP doesn't receive the completion packet.
-		o.o.HEvent = h | 1
-		defer syscall.CloseHandle(h)
+		defer pinner.Unpin()
+
+		pinner.Pin(o)
+		for _, ptr := range pinPtrs {
+			pinner.Pin(ptr)
+		}
+
+		if !fd.associated {
+			// If the handle is opened for overlapped IO but we can't
+			// use the runtime poller, then we need to use an
+			// event to wait for the IO to complete.
+			h, err := windows.CreateEvent(nil, 0, 0, nil)
+			if err != nil {
+				// This shouldn't happen when all CreateEvent arguments are zero.
+				panic(err)
+			}
+			// Set the low bit so that the external IOCP doesn't receive the completion packet.
+			o.o.HEvent = h | 1
+			defer syscall.CloseHandle(h)
+		}
 	}
-	fd.pin(mode, o)
+	if !hasCancelIoEx() && !fd.associated && !fd.isBlocking {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+	}
 	qty, err := submit(o)
 	var waitErr error
 	// Blocking operations shouldn't return ERROR_IO_PENDING.
 	// Continue without waiting if that happens.
-	if !fd.isBlocking && (err == syscall.ERROR_IO_PENDING || (err == nil && !fd.skipSyncNotif)) {
+	if !fd.isBlocking && (err == syscall.ERROR_IO_PENDING || (err == nil && fd.waitOnSuccess)) {
 		// IO started asynchronously or completed synchronously but
 		// a sync notification is required. Wait for it to complete.
 		waitErr = fd.waitIO(o)
-		if waitErr != nil {
-			// IO interrupted by "close" or "timeout".
-			fd.cancelIO(o)
-			// We issued a cancellation request, but the IO operation may still succeeded
-			// before the cancellation request runs.
-		}
 		if fd.isFile {
 			err = windows.GetOverlappedResult(fd.Sysfd, &o.o, &qty, false)
 		} else {
@@ -330,7 +357,7 @@ func (fd *FD) execIO(mode int, submit func(o *operation) (uint32, error)) (int, 
 		if waitErr != nil {
 			// IO canceled by the poller while waiting for completion.
 			err = waitErr
-		} else if fd.kind == kindPipe && fd.closing() {
+		} else if (fd.kind == kindPipe || fd.offPoller()) && fd.closing() {
 			// Close uses CancelIoEx to interrupt concurrent I/O for pipes.
 			// If the fd is a pipe and the Write was interrupted by CancelIoEx,
 			// we assume it is interrupted by Close.
@@ -372,7 +399,19 @@ type FD struct {
 	// Semaphore signaled when file is closed.
 	csema uint32
 
-	skipSyncNotif bool
+	// Deadlines for a handle the runtime poller does not own, which on a
+	// kernel that cannot take a handle back off a completion port is every
+	// handle but a socket. They hold the runtime clock reading a deadline
+	// falls on, or zero for none, and the events wake whatever is waiting
+	// when one moves. The handles are zero when the poller owns fd.
+	readDeadline       atomic.Int64
+	writeDeadline      atomic.Int64
+	readDeadlineEvent  syscall.Handle
+	writeDeadlineEvent syscall.Handle
+
+	// Don't wait from completion port notifications for successful
+	// operations that complete synchronously.
+	waitOnSuccess bool
 
 	// Whether this is a streaming descriptor, as opposed to a
 	// packet-based descriptor like a UDP socket.
@@ -391,7 +430,8 @@ type FD struct {
 	// Whether FILE_FLAG_OVERLAPPED was not set when opening the file.
 	isBlocking bool
 
-	disassociated atomic.Bool
+	// Whether the handle is currently associated with the IOCP.
+	associated bool
 
 	// readPinner and writePinner are automatically unpinned
 	// before execIO returns.
@@ -418,13 +458,7 @@ func (fd *FD) setOffset(off int64) {
 
 // addOffset adds the given offset to the current offset.
 func (fd *FD) addOffset(off int) {
-	fd.setOffset(fd.offset + int64(off))
-}
-
-// pollable should be used instead of fd.pd.pollable(),
-// as it is aware of the disassociated state.
-func (fd *FD) pollable() bool {
-	return fd.pd.pollable() && !fd.disassociated.Load()
+	fd.offset += int64(off)
 }
 
 // fileKind describes the kind of file.
@@ -435,7 +469,6 @@ const (
 	kindFile
 	kindConsole
 	kindPipe
-	kindFileNet
 )
 
 // Init initializes the FD. The Sysfd field should already be set.
@@ -456,8 +489,6 @@ func (fd *FD) Init(net string, pollable bool) error {
 		fd.kind = kindConsole
 	case "pipe":
 		fd.kind = kindPipe
-	case "file+net":
-		fd.kind = kindFileNet
 	default:
 		// We don't actually care about the various network types.
 		fd.kind = kindNet
@@ -469,34 +500,244 @@ func (fd *FD) Init(net string, pollable bool) error {
 		return nil
 	}
 
-	// It is safe to add overlapped handles that also perform I/O
-	// outside of the runtime poller. The runtime poller will ignore
-	// I/O completion notifications not initiated by us.
-	err := fd.pd.init(fd)
-	if err != nil {
-		return err
+	// The default behavior of the Windows I/O manager is to queue a completion
+	// port entry for successful operations that complete synchronously when
+	// the handle is opened for overlapped I/O. We will try to disable that
+	// behavior below, as it requires an extra syscall.
+	fd.waitOnSuccess = true
+
+	if !hasCancelIoEx() || (fd.kind != kindNet && !canDetachFromIOCP()) {
+		if err := fd.initDeadlineEvents(); err != nil {
+			return err
+		}
+	} else {
+		err := fd.pd.init(fd)
+		if err != nil {
+			if err != windows.ERROR_INVALID_PARAMETER || canDetachFromIOCP() {
+				return err
+			}
+			return nil
+		}
+		fd.associated = true
 	}
-	if fd.kind != kindNet || socketCanUseSetFileCompletionNotificationModes {
-		// Non-socket handles can use SetFileCompletionNotificationModes without problems.
-		err := syscall.SetFileCompletionNotificationModes(fd.Sysfd,
-			syscall.FILE_SKIP_SET_EVENT_ON_HANDLE|syscall.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS,
-		)
-		fd.skipSyncNotif = err == nil
+
+	// FILE_SKIP_SET_EVENT_ON_HANDLE is always safe to use. We don't use that feature
+	// and it adds some overhead to the Windows I/O manager.
+	// See https://devblogs.microsoft.com/oldnewthing/20200221-00/?p=103466.
+	modes := uint8(syscall.FILE_SKIP_SET_EVENT_ON_HANDLE)
+	if canSkipCompletionPortOnSuccess(fd.Sysfd, fd.kind == kindNet) {
+		modes |= syscall.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+	}
+	if syscall.SetFileCompletionNotificationModes(fd.Sysfd, modes) == nil {
+		if modes&syscall.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS != 0 {
+			fd.waitOnSuccess = false
+		}
 	}
 	return nil
 }
 
-// DisassociateIOCP disassociates the file handle from the IOCP.
-// The disassociate operation will not succeed if there is any
-// in-progress IO operation on the file handle.
-func (fd *FD) DisassociateIOCP() error {
-	if err := fd.incref(); err != nil {
+// initDeadlineEvents readies fd for being driven by events, one for each
+// direction, which SetDeadline signals so that a wait already under way works
+// out its new timeout. They are auto-reset, and a signal that finds nobody
+// waiting only costs the next wait one turn around its loop.
+func (fd *FD) initDeadlineEvents() error {
+	r, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
 		return err
 	}
-	defer fd.decref()
+	w, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		syscall.CloseHandle(r)
+		return err
+	}
+	fd.readDeadlineEvent, fd.writeDeadlineEvent = r, w
+	return nil
+}
 
-	if fd.isBlocking || !fd.pollable() {
+// keepsOwnDeadlines reports whether fd holds its own deadlines, which it does
+// when the runtime poller does not own it. See canDetachFromIOCP.
+func (fd *FD) keepsOwnDeadlines() bool {
+	return fd.readDeadlineEvent != 0
+}
+
+// offPoller reports whether fd does overlapped I/O that the runtime poller
+// does not own, a file kept off the completion port or a socket the poller
+// could not adopt. Only CancelIoEx can end a wait on such a handle.
+func (fd *FD) offPoller() bool {
+	return !fd.isBlocking && fd.pd.runtimeCtx == 0
+}
+
+// setDeadlineNoPoller records a deadline for a handle the poller does not own.
+// d is the time until the deadline, zero for none and negative for one that
+// has already passed, as setDeadlineImpl works it out.
+func (fd *FD) setDeadlineNoPoller(d int64, mode int) error {
+	if !fd.keepsOwnDeadlines() {
+		return ErrNoDeadline
+	}
+	deadline := int64(0)
+	if d != 0 {
+		deadline = runtimeNano() + d
+	}
+	if mode == 'r' || mode == 'r'+'w' {
+		fd.readDeadline.Store(deadline)
+		// Wake a wait that is already under way, so that it applies this
+		// deadline rather than the one it started with, since the
+		// promise on SetDeadline covers pending I/O, not only what
+		// follows it.
+		windows.SetEvent(fd.readDeadlineEvent)
+	}
+	if mode == 'w' || mode == 'r'+'w' {
+		fd.writeDeadline.Store(deadline)
+		windows.SetEvent(fd.writeDeadlineEvent)
+	}
+	return nil
+}
+
+// deadlineTimeout returns how long an operation in the given direction may
+// wait, in milliseconds, and whether its deadline has already passed.
+func (fd *FD) deadlineTimeout(mode int) (uint32, bool) {
+	deadline := fd.readDeadline.Load()
+	if mode == 'w' {
+		deadline = fd.writeDeadline.Load()
+	}
+	if deadline == 0 {
+		return syscall.INFINITE, false
+	}
+	left := deadline - runtimeNano()
+	if left <= 0 {
+		return 0, true
+	}
+	ms := (left + 1e6 - 1) / 1e6 // round up, so a wait never ends early
+	if ms >= syscall.INFINITE {
+		ms = syscall.INFINITE - 1
+	}
+	return uint32(ms), false
+}
+
+// waitEventIO waits for o on a handle the poller does not own. The wait ends
+// when the operation completes, when the deadline for its direction passes,
+// or when that deadline moves and has to be worked out again.
+func (fd *FD) waitEventIO(o *operation) error {
+	mode := int(o.mode)
+	deadlineEvent := fd.readDeadlineEvent
+	if mode == 'w' {
+		deadlineEvent = fd.writeDeadlineEvent
+	}
+	if deadlineEvent == 0 {
+		// A handle DisassociateIOCP took off the port, which keeps no
+		// deadline of its own. Only the operation can end this wait.
+		_, err := syscall.WaitForSingleObject(o.o.HEvent, syscall.INFINITE)
+		return err
+	}
+	handles := [2]syscall.Handle{o.o.HEvent, deadlineEvent}
+	for {
+		timeout, passed := fd.deadlineTimeout(mode)
+		if passed {
+			return fd.cancelEventIO(o, ErrDeadlineExceeded)
+		}
+		s, err := windows.WaitForMultipleObjects(2, &handles[0], false, timeout)
+		switch {
+		case err != nil:
+			return err
+		case s == syscall.WAIT_OBJECT_0:
+			return nil
+		case s == syscall.WAIT_OBJECT_0+1:
+			// The deadline moved. Work the wait out again.
+		default:
+			return fd.cancelEventIO(o, ErrDeadlineExceeded)
+		}
+	}
+}
+
+// cancelEventIO stops o and waits for the kernel to be done with it, so that
+// its buffers and OVERLAPPED are free by the time execIO returns, and reports
+// why it was stopped.
+func (fd *FD) cancelEventIO(o *operation, why error) error {
+	if err := syscall.CancelIoEx(fd.Sysfd, &o.o); err != nil && err != syscall.ERROR_NOT_FOUND {
+		if hasCancelIoEx() {
+			panic(err)
+		}
+	}
+	syscall.WaitForSingleObject(o.o.HEvent, syscall.INFINITE)
+	return why
+}
+
+// canDetachFromIOCP reports whether this kernel implements
+// FileReplaceCompletionInformation, the only way to take a handle back off a
+// completion port. Windows 8.1 added it. A handle that cannot be taken off
+// must never be put on one, or os.(*File).Fd cannot keep its promise to hand
+// back a detached handle, so Init keeps all but sockets off the poller here.
+func canDetachFromIOCP() bool {
+	if TestDisassociateIOCPUnsupported {
+		return false
+	}
+	return detachFromIOCPSupported()
+}
+
+// detachFromIOCPSupported probes once, using a handle to the null device.
+// Probing with a caller's handle would strand it, since a handle that turns
+// out not to be detachable stays on the port the probe put it on.
+var detachFromIOCPSupported = sync.OnceValue(func() bool {
+	nul, err := syscall.UTF16PtrFromString("NUL")
+	if err != nil {
+		return true
+	}
+	h, err := syscall.CreateFile(nul, syscall.GENERIC_READ|syscall.GENERIC_WRITE,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING,
+		syscall.FILE_FLAG_OVERLAPPED, 0)
+	if err != nil {
+		// No handle to probe with. Assume the kernel can detach, which
+		// is what this package assumed before it probed at all.
+		return true
+	}
+	defer syscall.CloseHandle(h)
+	port, err := windows.CreateIoCompletionPort(h, 0, 0, 0)
+	if err != nil {
+		return true
+	}
+	defer syscall.CloseHandle(port)
+	info := windows.FILE_COMPLETION_INFORMATION{}
+	return windows.NtSetInformationFile(h, &windows.IO_STATUS_BLOCK{}, unsafe.Pointer(&info),
+		uint32(unsafe.Sizeof(info)), windows.FileReplaceCompletionInformation) == nil
+})
+
+// FilesUsePoller reports whether the runtime poller owns handles other than
+// sockets. It does not where the kernel cannot take a handle back off a
+// completion port. See canDetachFromIOCP. Only tests need to ask.
+func FilesUsePoller() bool {
+	return canDetachFromIOCP()
+}
+
+// TestDisassociateIOCPUnsupported should only be used for testing purposes.
+// When set, [FD.DisassociateIOCP] behaves as it does on a kernel without
+// FileReplaceCompletionInformation.
+var TestDisassociateIOCPUnsupported bool
+
+// DisassociateIOCP disassociates the file handle from the IOCP.
+// The disassociate operation will not succeed if there is any
+// in-progress I/O operation on the file handle.
+func (fd *FD) DisassociateIOCP() error {
+	// There is a small race window between execIO checking fd.disassociated and
+	// DisassociateIOCP setting it. NtSetInformationFile will fail anyway if
+	// there is any in-progress I/O operation, so just take a read-write lock
+	// to ensure there is no in-progress I/O and fail early if we can't get the lock.
+	if ok, err := fd.tryReadWriteLock(); err != nil || !ok {
+		if err == nil {
+			err = errors.New("can't disassociate the handle while there is in-progress I/O")
+		}
+		return err
+	}
+	defer fd.readWriteUnlock()
+
+	if !fd.associated {
 		// Nothing to disassociate.
+		return nil
+	}
+
+	if !canDetachFromIOCP() {
+		// The handle cannot come off the port. Count it as off all the
+		// same, so that I/O on it is driven with an event from here on.
+		fd.associated = false
 		return nil
 	}
 
@@ -504,7 +745,8 @@ func (fd *FD) DisassociateIOCP() error {
 	if err := windows.NtSetInformationFile(fd.Sysfd, &windows.IO_STATUS_BLOCK{}, unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), windows.FileReplaceCompletionInformation); err != nil {
 		return err
 	}
-	fd.disassociated.Store(true)
+	// tryReadWriteLock means we have exclusive access to fd.
+	fd.associated = false
 	// Don't call fd.pd.close(), it would be too racy.
 	// There is no harm on leaving fd.pd open until Close is called.
 	return nil
@@ -519,13 +761,18 @@ func (fd *FD) destroy() error {
 	fd.pd.close()
 	var err error
 	switch fd.kind {
-	case kindNet, kindFileNet:
+	case kindNet:
 		// The net package uses the CloseFunc variable for testing.
 		err = CloseFunc(fd.Sysfd)
 	default:
 		err = syscall.CloseHandle(fd.Sysfd)
 	}
 	fd.Sysfd = syscall.InvalidHandle
+	if fd.readDeadlineEvent != 0 {
+		syscall.CloseHandle(fd.readDeadlineEvent)
+		syscall.CloseHandle(fd.writeDeadlineEvent)
+		fd.readDeadlineEvent, fd.writeDeadlineEvent = 0, 0
+	}
 	runtime_Semrelease(&fd.csema)
 	return err
 }
@@ -537,7 +784,11 @@ func (fd *FD) Close() error {
 		return errClosing(fd.isFile)
 	}
 
-	if fd.kind == kindPipe {
+	if fd.kind == kindPipe || fd.offPoller() {
+		// Interrupt whatever is waiting. The poller is not watching this
+		// handle, so nothing else would end a wait before the handle
+		// closed, and the handle cannot close until the operation holding
+		// it lets go.
 		syscall.CancelIoEx(fd.Sysfd, nil)
 	}
 	// unblock pending reader and writer
@@ -554,6 +805,13 @@ func (fd *FD) Close() error {
 // See golang.org/issue/26923.
 const maxRW = 1 << 30 // 1GB is large enough and keeps subsequent reads aligned
 
+func pinPtrsFromBuf(buf []byte) []any {
+	if len(buf) == 0 {
+		return nil
+	}
+	return []any{unsafe.SliceData(buf)}
+}
+
 // Read implements io.Reader.
 func (fd *FD) Read(buf []byte) (int, error) {
 	if fd.kind == kindFile {
@@ -566,10 +824,6 @@ func (fd *FD) Read(buf []byte) (int, error) {
 			return 0, err
 		}
 		defer fd.readUnlock()
-	}
-
-	if len(buf) > 0 {
-		fd.pin('r', &buf[0])
 	}
 
 	if len(buf) > maxRW {
@@ -585,7 +839,7 @@ func (fd *FD) Read(buf []byte) (int, error) {
 		n, err = fd.execIO('r', func(o *operation) (qty uint32, err error) {
 			err = syscall.ReadFile(fd.Sysfd, buf, &qty, fd.overlapped(o))
 			return qty, err
-		})
+		}, pinPtrsFromBuf(buf)...)
 		fd.addOffset(n)
 		switch err {
 		case syscall.ERROR_HANDLE_EOF:
@@ -601,7 +855,7 @@ func (fd *FD) Read(buf []byte) (int, error) {
 			var flags uint32
 			err = syscall.WSARecv(fd.Sysfd, newWsaBuf(buf), 1, &qty, &flags, &o.o, nil)
 			return qty, err
-		})
+		}, pinPtrsFromBuf(buf)...)
 		if race.Enabled {
 			race.Acquire(unsafe.Pointer(&ioSync))
 		}
@@ -698,35 +952,28 @@ func (fd *FD) Pread(buf []byte, off int64) (int, error) {
 	}
 	defer fd.readWriteUnlock()
 
-	if len(buf) > 0 {
-		fd.pin('r', &buf[0])
-	}
-
 	if len(buf) > maxRW {
 		buf = buf[:maxRW]
 	}
 
-	if fd.isBlocking {
-		curoffset, err := syscall.Seek(fd.Sysfd, 0, io.SeekCurrent)
-		if err != nil {
-			return 0, err
-		}
-		defer syscall.Seek(fd.Sysfd, curoffset, io.SeekStart)
-		defer fd.setOffset(curoffset)
-	} else {
+	n, err := fd.execIO('r', func(o *operation) (qty uint32, err error) {
 		// Overlapped handles don't have the file pointer updated
 		// when performing I/O operations, so there is no need to
 		// call Seek to reset the file pointer.
 		// Also, some overlapped file handles don't support seeking.
 		// See https://go.dev/issues/74951.
-		curoffset := fd.offset
-		defer fd.setOffset(curoffset)
-	}
-	fd.setOffset(off)
-	n, err := fd.execIO('r', func(o *operation) (qty uint32, err error) {
+		if fd.isBlocking {
+			curoffset, err := syscall.Seek(fd.Sysfd, 0, io.SeekCurrent)
+			if err != nil {
+				return 0, err
+			}
+			defer syscall.Seek(fd.Sysfd, curoffset, io.SeekStart)
+		}
+		o.setOffset(off)
+
 		err = syscall.ReadFile(fd.Sysfd, buf, &qty, &o.o)
 		return qty, err
-	})
+	}, pinPtrsFromBuf(buf)...)
 	if err == syscall.ERROR_HANDLE_EOF {
 		err = io.EOF
 	}
@@ -749,15 +996,13 @@ func (fd *FD) ReadFrom(buf []byte) (int, syscall.Sockaddr, error) {
 	}
 	defer fd.readUnlock()
 
-	fd.pin('r', &buf[0])
-
 	rsa := newWSARsa()
 	defer wsaRsaPool.Put(rsa)
 	n, err := fd.execIO('r', func(o *operation) (qty uint32, err error) {
 		var flags uint32
 		err = syscall.WSARecvFrom(fd.Sysfd, newWsaBuf(buf), 1, &qty, &flags, &rsa.name, &rsa.namelen, &o.o, nil)
 		return qty, err
-	})
+	}, unsafe.SliceData(buf), rsa)
 	err = fd.eofError(n, err)
 	if err != nil {
 		return n, nil, err
@@ -779,15 +1024,13 @@ func (fd *FD) ReadFromInet4(buf []byte, sa4 *syscall.SockaddrInet4) (int, error)
 	}
 	defer fd.readUnlock()
 
-	fd.pin('r', &buf[0])
-
 	rsa := newWSARsa()
 	defer wsaRsaPool.Put(rsa)
 	n, err := fd.execIO('r', func(o *operation) (qty uint32, err error) {
 		var flags uint32
 		err = syscall.WSARecvFrom(fd.Sysfd, newWsaBuf(buf), 1, &qty, &flags, &rsa.name, &rsa.namelen, &o.o, nil)
 		return qty, err
-	})
+	}, unsafe.SliceData(buf), rsa)
 	err = fd.eofError(n, err)
 	if err != nil {
 		return n, err
@@ -809,15 +1052,13 @@ func (fd *FD) ReadFromInet6(buf []byte, sa6 *syscall.SockaddrInet6) (int, error)
 	}
 	defer fd.readUnlock()
 
-	fd.pin('r', &buf[0])
-
 	rsa := newWSARsa()
 	defer wsaRsaPool.Put(rsa)
 	n, err := fd.execIO('r', func(o *operation) (qty uint32, err error) {
 		var flags uint32
 		err = syscall.WSARecvFrom(fd.Sysfd, newWsaBuf(buf), 1, &qty, &flags, &rsa.name, &rsa.namelen, &o.o, nil)
 		return qty, err
-	})
+	}, unsafe.SliceData(buf), rsa)
 	err = fd.eofError(n, err)
 	if err != nil {
 		return n, err
@@ -840,9 +1081,6 @@ func (fd *FD) Write(buf []byte) (int, error) {
 		defer fd.writeUnlock()
 	}
 
-	if len(buf) > 0 {
-		fd.pin('w', &buf[0])
-	}
 	var ntotal int
 	for {
 		max := len(buf)
@@ -859,7 +1097,7 @@ func (fd *FD) Write(buf []byte) (int, error) {
 			n, err = fd.execIO('w', func(o *operation) (qty uint32, err error) {
 				err = syscall.WriteFile(fd.Sysfd, b, &qty, fd.overlapped(o))
 				return qty, err
-			})
+			}, pinPtrsFromBuf(b)...)
 			fd.addOffset(n)
 		case kindNet:
 			if race.Enabled {
@@ -868,7 +1106,7 @@ func (fd *FD) Write(buf []byte) (int, error) {
 			n, err = fd.execIO('w', func(o *operation) (qty uint32, err error) {
 				err = syscall.WSASend(fd.Sysfd, newWsaBuf(b), 1, &qty, 0, &o.o, nil)
 				return qty, err
-			})
+			}, pinPtrsFromBuf(b)...)
 		}
 		ntotal += n
 		if ntotal == len(buf) || err != nil {
@@ -935,38 +1173,31 @@ func (fd *FD) Pwrite(buf []byte, off int64) (int, error) {
 	}
 	defer fd.readWriteUnlock()
 
-	if len(buf) > 0 {
-		fd.pin('w', &buf[0])
-	}
-
-	if fd.isBlocking {
-		curoffset, err := syscall.Seek(fd.Sysfd, 0, io.SeekCurrent)
-		if err != nil {
-			return 0, err
-		}
-		defer syscall.Seek(fd.Sysfd, curoffset, io.SeekStart)
-		defer fd.setOffset(curoffset)
-	} else {
-		// Overlapped handles don't have the file pointer updated
-		// when performing I/O operations, so there is no need to
-		// call Seek to reset the file pointer.
-		// Also, some overlapped file handles don't support seeking.
-		// See https://go.dev/issues/74951.
-		curoffset := fd.offset
-		defer fd.setOffset(curoffset)
-	}
-
 	var ntotal int
 	for {
 		max := len(buf)
 		if max-ntotal > maxRW {
 			max = ntotal + maxRW
 		}
-		fd.setOffset(off + int64(ntotal))
+		b := buf[ntotal:max]
 		n, err := fd.execIO('w', func(o *operation) (qty uint32, err error) {
-			err = syscall.WriteFile(fd.Sysfd, buf[ntotal:max], &qty, &o.o)
+			// Overlapped handles don't have the file pointer updated
+			// when performing I/O operations, so there is no need to
+			// call Seek to reset the file pointer.
+			// Also, some overlapped file handles don't support seeking.
+			// See https://go.dev/issues/74951.
+			if fd.isBlocking {
+				curoffset, err := syscall.Seek(fd.Sysfd, 0, io.SeekCurrent)
+				if err != nil {
+					return 0, err
+				}
+				defer syscall.Seek(fd.Sysfd, curoffset, io.SeekStart)
+			}
+			o.setOffset(off + int64(ntotal))
+
+			err = syscall.WriteFile(fd.Sysfd, b, &qty, &o.o)
 			return qty, err
-		})
+		}, pinPtrsFromBuf(b)...)
 		if n > 0 {
 			ntotal += n
 		}
@@ -1018,8 +1249,6 @@ func (fd *FD) WriteTo(buf []byte, sa syscall.Sockaddr) (int, error) {
 		return n, err
 	}
 
-	fd.pin('w', &buf[0])
-
 	ntotal := 0
 	for len(buf) > 0 {
 		b := buf
@@ -1029,7 +1258,7 @@ func (fd *FD) WriteTo(buf []byte, sa syscall.Sockaddr) (int, error) {
 		n, err := fd.execIO('w', func(o *operation) (qty uint32, err error) {
 			err = syscall.WSASendto(fd.Sysfd, newWsaBuf(b), 1, &qty, 0, sa, &o.o, nil)
 			return qty, err
-		})
+		}, unsafe.SliceData(b))
 		ntotal += int(n)
 		if err != nil {
 			return ntotal, err
@@ -1055,8 +1284,6 @@ func (fd *FD) WriteToInet4(buf []byte, sa4 *syscall.SockaddrInet4) (int, error) 
 		return n, err
 	}
 
-	fd.pin('w', &buf[0])
-
 	ntotal := 0
 	for len(buf) > 0 {
 		b := buf
@@ -1066,7 +1293,7 @@ func (fd *FD) WriteToInet4(buf []byte, sa4 *syscall.SockaddrInet4) (int, error) 
 		n, err := fd.execIO('w', func(o *operation) (qty uint32, err error) {
 			err = windows.WSASendtoInet4(fd.Sysfd, newWsaBuf(b), 1, &qty, 0, sa4, &o.o, nil)
 			return qty, err
-		})
+		}, unsafe.SliceData(b))
 		ntotal += int(n)
 		if err != nil {
 			return ntotal, err
@@ -1092,8 +1319,6 @@ func (fd *FD) WriteToInet6(buf []byte, sa6 *syscall.SockaddrInet6) (int, error) 
 		return n, err
 	}
 
-	fd.pin('w', &buf[0])
-
 	ntotal := 0
 	for len(buf) > 0 {
 		b := buf
@@ -1103,7 +1328,7 @@ func (fd *FD) WriteToInet6(buf []byte, sa6 *syscall.SockaddrInet6) (int, error) 
 		n, err := fd.execIO('w', func(o *operation) (qty uint32, err error) {
 			err = windows.WSASendtoInet6(fd.Sysfd, newWsaBuf(b), 1, &qty, 0, sa6, &o.o, nil)
 			return qty, err
-		})
+		}, unsafe.SliceData(b))
 		ntotal += int(n)
 		if err != nil {
 			return ntotal, err
@@ -1389,7 +1614,7 @@ func (fd *FD) ReadMsg(p []byte, oob []byte, flags int) (int, int, int, syscall.S
 	n, err := fd.execIO('r', func(o *operation) (qty uint32, err error) {
 		err = windows.WSARecvMsg(fd.Sysfd, msg, &qty, &o.o, nil)
 		return qty, err
-	})
+	}, rsa, msg)
 	err = fd.eofError(n, err)
 	var sa syscall.Sockaddr
 	if err == nil {
@@ -1416,7 +1641,7 @@ func (fd *FD) ReadMsgInet4(p []byte, oob []byte, flags int, sa4 *syscall.Sockadd
 	n, err := fd.execIO('r', func(o *operation) (qty uint32, err error) {
 		err = windows.WSARecvMsg(fd.Sysfd, msg, &qty, &o.o, nil)
 		return qty, err
-	})
+	}, rsa, msg)
 	err = fd.eofError(n, err)
 	if err == nil {
 		rawToSockaddrInet4(msg.Name, sa4)
@@ -1442,7 +1667,7 @@ func (fd *FD) ReadMsgInet6(p []byte, oob []byte, flags int, sa6 *syscall.Sockadd
 	n, err := fd.execIO('r', func(o *operation) (qty uint32, err error) {
 		err = windows.WSARecvMsg(fd.Sysfd, msg, &qty, &o.o, nil)
 		return qty, err
-	})
+	}, rsa, msg)
 	err = fd.eofError(n, err)
 	if err == nil {
 		rawToSockaddrInet6(msg.Name, sa6)
@@ -1476,7 +1701,7 @@ func (fd *FD) WriteMsg(p []byte, oob []byte, sa syscall.Sockaddr) (int, int, err
 	n, err := fd.execIO('w', func(o *operation) (qty uint32, err error) {
 		err = windows.WSASendMsg(fd.Sysfd, msg, 0, nil, &o.o, nil)
 		return qty, err
-	})
+	}, rsa, msg)
 	return n, int(msg.Control.Len), err
 }
 
@@ -1502,7 +1727,7 @@ func (fd *FD) WriteMsgInet4(p []byte, oob []byte, sa *syscall.SockaddrInet4) (in
 	n, err := fd.execIO('w', func(o *operation) (qty uint32, err error) {
 		err = windows.WSASendMsg(fd.Sysfd, msg, 0, nil, &o.o, nil)
 		return qty, err
-	})
+	}, rsa, msg)
 	return n, int(msg.Control.Len), err
 }
 
@@ -1528,7 +1753,7 @@ func (fd *FD) WriteMsgInet6(p []byte, oob []byte, sa *syscall.SockaddrInet6) (in
 	n, err := fd.execIO('w', func(o *operation) (qty uint32, err error) {
 		err = windows.WSASendMsg(fd.Sysfd, msg, 0, nil, &o.o, nil)
 		return qty, err
-	})
+	}, rsa, msg)
 	return n, int(msg.Control.Len), err
 }
 

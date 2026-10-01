@@ -7,6 +7,7 @@ import (
 
 func check(name string, fn func() error) {
 	fmt.Printf("check %s: ", name)
+	_ = os.Stdout.Sync()
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "PANIC %v\n", r)
@@ -18,6 +19,7 @@ func check(name string, fn func() error) {
 		os.Exit(1)
 	}
 	fmt.Println("ok")
+	_ = os.Stdout.Sync()
 }
 
 func section(name string) {

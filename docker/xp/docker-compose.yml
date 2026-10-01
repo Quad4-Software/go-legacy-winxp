@@ -1,19 +1,25 @@
 services:
   windows-xp:
-    image: dockurr/windows:6.04
+    image: go-legacy-winxp-guest:6.04
+    build:
+      context: .
+      dockerfile: Dockerfile.guest
     container_name: go-legacy-winxp-test
     privileged: true
     environment:
       VERSION: "xp"
-      RAM_SIZE: "2G"
-      CPU_CORES: "2"
+      RAM_SIZE: "1G"
+      CPU_CORES: "1"
       CPU_MODEL: "qemu64"
       DISK_SIZE: "8G"
       USERNAME: "docker"
       PASSWORD: "admin"
       HV: "N"
+      KVM: "${XP_KVM:-Y}"
       REMOVE: "N"
       LOG: "Y"
+      DEBUG: "Y"
+      QEMU_TIMEOUT: "1800"
     devices:
       - /dev/kvm
       - /dev/net/tun
@@ -21,6 +27,7 @@ services:
       - NET_ADMIN
     ports:
       - "8006:8006"
+      - "5900:5900"
     volumes:
       - ${XP_STORAGE:-./storage}:/storage
       - ./oem:/oem

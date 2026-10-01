@@ -36,15 +36,35 @@ set LOGFILE=%SHARE%\smoke.log
 echo starting > "%RESULT%"
 
 :run_tests
+if exist C:\OEM\reticulum-go-winxp.exe (
+  C:\OEM\reticulum-go-winxp.exe --version > C:\OEM\reticulum.out 2>&1
+  set EXITCODE=%ERRORLEVEL%
+  if %EXITCODE% neq 0 goto write_result
+  findstr /C:"reticulum-go" C:\OEM\reticulum.out >nul
+  if errorlevel 1 (
+    echo reticulum-go version output missing marker > C:\OEM\smoke-386.out
+    set EXITCODE=1
+    goto write_result
+  )
+)
+
 if not exist C:\OEM\xp-smoke-386.exe (
   echo missing C:\OEM\xp-smoke-386.exe > C:\OEM\smoke-386.out
   set EXITCODE=1
   goto write_result
 )
 
-C:\OEM\xp-smoke-386.exe > C:\OEM\smoke-386.out 2>&1
+C:\OEM\xp-smoke-386.exe > C:\OEM\smoke.tmp 2>&1
 set EXITCODE=%ERRORLEVEL%
+if exist C:\OEM\reticulum.out (
+  echo reticulum-go --version ok > C:\OEM\smoke-386.out
+  type C:\OEM\reticulum.out >> C:\OEM\smoke-386.out
+) else (
+  echo. > C:\OEM\smoke-386.out
+)
+type C:\OEM\smoke.tmp >> C:\OEM\smoke-386.out
 if %EXITCODE% neq 0 goto write_result
+
 set STATUS=PASS
 
 :write_result
@@ -53,6 +73,7 @@ if not "%SHARE%"=="" (
   echo %EXITCODE% > "%EXITFILE%"
   if exist C:\OEM\smoke-386.out copy /Y C:\OEM\smoke-386.out "%OUT%" >nul
   if not exist C:\OEM\smoke-386.out echo no smoke output captured > "%OUT%"
+  if exist C:\OEM\reticulum.out copy /Y C:\OEM\reticulum.out "%SHARE%\reticulum.out" >nul
   echo status=%STATUS% > "%LOGFILE%"
   echo exit=%EXITCODE% >> "%LOGFILE%"
   echo --- stdout stderr --- >> "%LOGFILE%"

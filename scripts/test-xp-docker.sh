@@ -96,6 +96,17 @@ validate_smoke_output() {
     return 1
   fi
 
+  if [[ -f "$SHARED/reticulum-go-winxp.exe" ]]; then
+    if [[ ! -f "$SHARED/reticulum.out" ]] && ! grep -Fq "reticulum-go --version ok" "$SMOKE_OUT"; then
+      echo "reticulum-go was staged but guest did not report version output" >&2
+      return 1
+    fi
+    if ! grep -Fq "reticulum-go" "$SMOKE_OUT"; then
+      echo "smoke.out missing reticulum-go version marker" >&2
+      return 1
+    fi
+  fi
+
   if [[ -f "$SMOKE_EXIT" ]]; then
     exit_code="$(tr -d '[:space:]' < "$SMOKE_EXIT" || true)"
     if [[ "$status" == "PASS" && "$exit_code" != "0" ]]; then
@@ -164,24 +175,57 @@ validate_xp_storage() {
   fi
 }
 
-if [[ -f "$(resolve_storage_dir)/windows.boot" ]]; then
-  TIMEOUT_SECS="${XP_TEST_TIMEOUT:-1800}"
-else
-  TIMEOUT_SECS="${XP_TEST_TIMEOUT:-7200}"
-fi
+detect_xp_kvm() {
+  local clock=""
+  if [[ -n "${XP_KVM:-}" ]]; then
+    echo "using XP_KVM=${XP_KVM}"
+    export XP_KVM
+    return
+  fi
 
-if [[ ! -e /dev/kvm ]]; then
-  echo "KVM device /dev/kvm not available" >&2
-  echo "dockur/windows needs KVM for usable XP testing" >&2
-  exit 1
-fi
+  XP_KVM=Y
+  if [[ -r /sys/devices/system/clocksource/clocksource0/current_clocksource ]]; then
+    clock="$(tr -d '[:space:]' < /sys/devices/system/clocksource/clocksource0/current_clocksource)"
+  fi
+  if [[ "$clock" == "kvm-clock" ]] || grep -qw hypervisor /proc/cpuinfo; then
+    XP_KVM=N
+    echo "nested hypervisor detected (clock=${clock:-unknown}), using TCG"
+  fi
+  if dmesg 2>/dev/null | grep -q 'kvm_spurious_fault'; then
+    XP_KVM=N
+    echo "host KVM is unsafe (kvm_spurious_fault in dmesg), using TCG"
+  fi
+  if [[ "$XP_KVM" != [Nn]* && ! -e /dev/kvm ]]; then
+    XP_KVM=N
+    echo "/dev/kvm missing, using TCG"
+  fi
+  export XP_KVM
+}
 
 if ! docker info >/dev/null 2>&1; then
   echo "docker is not available or not permitted for this user" >&2
   exit 1
 fi
 
+detect_xp_kvm
+
+if [[ -f "$(resolve_storage_dir)/windows.boot" ]]; then
+  if [[ "${XP_KVM}" == [Nn]* ]]; then
+    TIMEOUT_SECS="${XP_TEST_TIMEOUT:-3600}"
+  else
+    TIMEOUT_SECS="${XP_TEST_TIMEOUT:-1800}"
+  fi
+else
+  if [[ "${XP_KVM}" == [Nn]* ]]; then
+    TIMEOUT_SECS="${XP_TEST_TIMEOUT:-14400}"
+  else
+    TIMEOUT_SECS="${XP_TEST_TIMEOUT:-7200}"
+  fi
+fi
+
 "$ROOT/scripts/check-xp-pe.sh" "$XP_DIR/oem"
+
+"$ROOT/scripts/build-reticulum-xp.sh" "$XP_DIR/oem"
 
 rm -f "$RESULT" "$SMOKE_OUT" "$SMOKE_EXIT" "$SMOKE_LOG" "$SMOKE_REPORT" "$SHARED/smoke-amd64.out"
 rm -f "$XP_DIR/oem/xp-smoke-amd64.exe" "$SHARED/xp-smoke-amd64.exe"
@@ -197,12 +241,18 @@ validate_xp_storage
 echo "starting Windows XP container (web UI on http://127.0.0.1:8006/)"
 echo "guest stdout/stderr will be saved to docker/xp/shared/smoke.out and smoke.log"
 echo "first boot downloads and installs XP then runs docker/xp/oem/install.bat"
-"${COMPOSE[@]}" up -d
+echo "accelerator XP_KVM=${XP_KVM}"
+"${COMPOSE[@]}" up -d --build
 
 cleanup() {
+  local code="$1"
+  if [[ "${XP_KEEP:-}" == "1" || "$code" -eq 0 ]]; then
+    echo "leaving guest running, UI at http://127.0.0.1:8006/"
+    return
+  fi
   "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
 }
-trap cleanup EXIT
+trap 'cleanup $?' EXIT
 
 deadline=$((SECONDS + TIMEOUT_SECS))
 echo "waiting up to ${TIMEOUT_SECS}s for PASS/FAIL in $RESULT"

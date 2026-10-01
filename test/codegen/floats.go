@@ -59,14 +59,14 @@ func DivPow2(f1, f2, f3 float64) (float64, float64, float64) {
 }
 
 func indexLoad(b0 []float32, b1 float32, idx int) float32 {
-	// arm64:`FMOVS\s\(R[0-9]+\)\(R[0-9]+<<2\),\sF[0-9]+`
-	// loong64:`MOVF\s\(R[0-9]+\)\(R[0-9]+\),\sF[0-9]+`
+	// arm64:`FMOVS \(R[0-9]+\)\(R[0-9]+<<2\), F[0-9]+`
+	// loong64:`MOVF \(R[0-9]+\)\(R[0-9]+\), F[0-9]+`
 	return b0[idx] * b1
 }
 
 func indexStore(b0 []float64, b1 float64, idx int) {
-	// arm64:`FMOVD\sF[0-9]+,\s\(R[0-9]+\)\(R[0-9]+<<3\)`
-	// loong64:`MOVD\sF[0-9]+,\s\(R[0-9]+\)\(R[0-9]+\)`
+	// arm64:`FMOVD F[0-9]+, \(R[0-9]+\)\(R[0-9]+<<3\)`
+	// loong64:`MOVD F[0-9]+, \(R[0-9]+\)\(R[0-9]+\)`
 	b0[idx] = b1
 }
 
@@ -172,46 +172,50 @@ func ArrayCopy(a [16]byte) (b [16]byte) {
 // ---------------- //
 
 func Float64Min(a, b float64) float64 {
+	// FIXME: add WFMINDB on s390x/z14 when GOS390X is added.
+
 	// amd64:"MINSD"
 	// arm64:"FMIND"
 	// loong64:"FMIND"
 	// riscv64:"FMIN"
 	// ppc64/power9:"XSMINJDP"
 	// ppc64/power10:"XSMINJDP"
-	// s390x: "WFMINDB"
 	return min(a, b)
 }
 
 func Float64Max(a, b float64) float64 {
+	// FIXME: add WFMAXDB on s390x/z14 when GOS390X is added.
+
 	// amd64:"MINSD"
 	// arm64:"FMAXD"
 	// loong64:"FMAXD"
 	// riscv64:"FMAX"
 	// ppc64/power9:"XSMAXJDP"
 	// ppc64/power10:"XSMAXJDP"
-	// s390x: "WFMAXDB"
 	return max(a, b)
 }
 
 func Float32Min(a, b float32) float32 {
+	// FIXME: add WFMINSB on s390x/z14 when GOS390X is added.
+
 	// amd64:"MINSS"
 	// arm64:"FMINS"
 	// loong64:"FMINF"
 	// riscv64:"FMINS"
 	// ppc64/power9:"XSMINJDP"
 	// ppc64/power10:"XSMINJDP"
-	// s390x: "WFMINSB"
 	return min(a, b)
 }
 
 func Float32Max(a, b float32) float32 {
+	// FIXME: add WFMAXSB on s390x/z14 when GOS390X is added.
+
 	// amd64:"MINSS"
 	// arm64:"FMAXS"
 	// loong64:"FMAXF"
 	// riscv64:"FMAXS"
 	// ppc64/power9:"XSMAXJDP"
 	// ppc64/power10:"XSMAXJDP"
-	// s390x: "WFMAXSB"
 	return max(a, b)
 }
 
@@ -221,6 +225,7 @@ func Float32Max(a, b float32) float32 {
 
 func Float32ConstantZero() float32 {
 	// arm64:"FMOVS ZR,"
+	// riscv64:"MOVF X0,"
 	return 0.0
 }
 
@@ -234,11 +239,13 @@ func Float32Constant() float32 {
 	// ppc64x/power8:"FMOVS [$]f32\\.42440000\\(SB\\)"
 	// ppc64x/power9:"FMOVS [$]f32\\.42440000\\(SB\\)"
 	// ppc64x/power10:"XXSPLTIDP [$]1111752704,"
+	// riscv64:"MOVF [$]f32\\.42440000\\(SB\\)"
 	return 49.0
 }
 
 func Float64ConstantZero() float64 {
 	// arm64:"FMOVD ZR,"
+	// riscv64:"MOVD X0,"
 	return 0.0
 }
 
@@ -252,6 +259,7 @@ func Float64Constant() float64 {
 	// ppc64x/power8:"FMOVD [$]f64\\.4048800000000000\\(SB\\)"
 	// ppc64x/power9:"FMOVD [$]f64\\.4048800000000000\\(SB\\)"
 	// ppc64x/power10:"XXSPLTIDP [$]1111752704,"
+	// riscv64:"MOVD [$]f64\\.4048800000000000\\(SB\\)"
 	return 49.0
 }
 
@@ -278,6 +286,62 @@ func Float64ConstantStore(p *float64) {
 	// amd64: "MOVQ [$]4617801906721357038"
 	// riscv64: "MOVD [$]f64.4015ba5e353f7cee"
 	*p = 5.432
+}
+
+func WideCeilNarrow(x float32) float32 {
+	// amd64/v3:"ROUNDSS" -"CVTSS2SD" -"CVTSD2SS"
+	// arm64:"FRINTPS" -"FCVTSD" -"FCVTDS"
+	// wasm:"F32Ceil" -"F64PromoteF32" -"F32DemoteF64"
+	return float32(math.Ceil(float64(x)))
+}
+
+func WideTruncNarrow(x float32) float32 {
+	// amd64/v3:"ROUNDSS" -"CVTSS2SD" -"CVTSD2SS"
+	// arm64:"FRINTZS" -"FCVTSD" -"FCVTDS"
+	// wasm:"F32Trunc" -"F64PromoteF32" -"F32DemoteF64"
+	return float32(math.Trunc(float64(x)))
+}
+
+func WideFloorNarrow(x float32) float32 {
+	// amd64/v3:"ROUNDSS" -"CVTSS2SD" -"CVTSD2SS"
+	// arm64:"FRINTMS" -"FCVTSD" -"FCVTDS"
+	// wasm:"F32Floor" -"F64PromoteF32" -"F32DemoteF64"
+	return float32(math.Floor(float64(x)))
+}
+
+func WideRoundNarrow(x float32) float32 {
+	// arm64:"FRINTAS" -"FCVTSD" -"FCVTDS"
+	return float32(math.Round(float64(x)))
+}
+
+func WideRoundToEvenNarrow(x float32) float32 {
+	// amd64/v3:"ROUNDSS" -"CVTSS2SD" -"CVTSD2SS"
+	// arm64:"FRINTNS" -"FCVTSD" -"FCVTDS"
+	// wasm:"F32Nearest" -"F64PromoteF32" -"F32DemoteF64"
+	return float32(math.RoundToEven(float64(x)))
+}
+
+func WideSqrtNarrow(x float32) float32 {
+	// arm64:"FSQRTS" -"FCVTSD" -"FCVTDS"
+	// loong64:"SQRTF" -"MOVFD" -"MOVDF"
+	// mips64/hardfloat:"SQRTF" -"MOVFD" -"MOVDF"
+	// riscv64:"FSQRTS" -"FCVTDS" -"FCVTSD"
+	// wasm:"F32Sqrt" -"F64PromoteF32" -"F32DemoteF64"
+	return float32(math.Sqrt(float64(x)))
+}
+
+func WideAbsNarrow(x float32) float32 {
+	// arm64:"FABSS" -"FCVTSD" -"FCVTDS"
+	// loong64:"ABSF" -"MOVFD" -"MOVDF"
+	// mips64/hardfloat:"ABSF" -"MOVFD" -"MOVDF"
+	// riscv64:"FABSS" -"FCVTDS" -"FCVTSD"
+	// wasm:"F32Abs" -"F64PromoteF32" -"F32DemoteF64"
+	return float32(math.Abs(float64(x)))
+}
+
+func WideCopysignNarrow(x, y float32) float32 {
+	// wasm:"F32Copysign"
+	return float32(math.Copysign(float64(x), float64(y)))
 }
 
 // ------------------------ //

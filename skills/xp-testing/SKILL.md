@@ -17,7 +17,7 @@ description: >-
    - Fails if Vista+ APIs appear as static imports
 
 2. **Live guest (optional)** `./scripts/test-xp-docker.sh`
-   - Requires Docker and `/dev/kvm`
+   - Requires Docker. Uses KVM when it is safe, otherwise TCG (`XP_KVM=N`)
    - Runs `dockurr/windows` with `VERSION=xp`
    - Guest runs `docker/xp/oem/install.bat` (first install) or `docker/xp/shared/run.bat` (retest)
    - Host waits for `docker/xp/shared/result.txt` containing only `PASS` or `FAIL`
@@ -34,6 +34,7 @@ cd src && ./make.bash && cd ..
 # Live test only
 docker info
 ls -l /dev/kvm
+# Nested hosts often need TCG: XP_KVM=N ./scripts/test-xp-docker.sh
 ```
 
 ## Commands
@@ -46,7 +47,9 @@ ls -l /dev/kvm
 
 Environment:
 
-- `XP_TEST_TIMEOUT` seconds to wait for guest `PASS`/`FAIL` (default `7200` for first install, `1800` when `windows.boot` exists)
+- `XP_TEST_TIMEOUT` seconds to wait for guest `PASS`/`FAIL` (KVM default `7200` first install / `1800` cached disk, TCG default `14400` / `3600`)
+- `XP_KVM` `Y` or `N` (unset: auto, nested hypervisor uses TCG)
+- `XP_KEEP=1` leaves the guest running after the script exits
 - `GO` path to go binary (default `./bin/go`)
 
 Web viewer during Docker runs: `http://127.0.0.1:8006/`
@@ -90,7 +93,7 @@ These must not appear in the PE import table of XP smoke binaries (dynamic `GetP
 ## After changing XP runtime / link code
 
 1. `./scripts/check-xp-pe.sh`
-2. If KVM available, `./scripts/test-xp-docker.sh`
+2. `./scripts/test-xp-docker.sh`
 3. Regenerate patch 0010 against the matching win7 checkout:
    `./scripts/regenerate-xp-patch.sh /tmp/go-legacy-win7`
    (see `skills/upstream-update/SKILL.md`)
