@@ -38,8 +38,8 @@ func canUseConnectEx(net string) bool {
 	return false
 }
 
-func newFD(sysfd syscall.Handle, family, sotype int, net string) (*netFD, error) {
-	ret := &netFD{
+func newFD(sysfd syscall.Handle, family, sotype int, net string) *netFD {
+	return &netFD{
 		pfd: poll.FD{
 			Sysfd:         sysfd,
 			IsStream:      sotype == syscall.SOCK_STREAM,
@@ -49,7 +49,6 @@ func newFD(sysfd syscall.Handle, family, sotype int, net string) (*netFD, error)
 		sotype: sotype,
 		net:    net,
 	}
-	return ret, nil
 }
 
 func (fd *netFD) init() error {
@@ -60,17 +59,24 @@ func (fd *netFD) init() error {
 	case "udp", "udp4", "udp6":
 		// Disable reporting of PORT_UNREACHABLE errors.
 		// See https://go.dev/issue/5834.
-		// SIO_UDP_CONNRESET and SIO_UDP_NETRESET are not supported on Windows XP.
 		ret := uint32(0)
 		flag := uint32(0)
 		size := uint32(unsafe.Sizeof(flag))
-		_ = syscall.WSAIoctl(fd.pfd.Sysfd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
+		err := syscall.WSAIoctl(fd.pfd.Sysfd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
+		if err != nil {
+			// SIO_UDP_CONNRESET is not supported on Windows XP.
+			_ = err
+		}
 		// Disable reporting of NET_UNREACHABLE errors.
 		// See https://go.dev/issue/68614.
 		ret = 0
 		flag = 0
 		size = uint32(unsafe.Sizeof(flag))
-		_ = syscall.WSAIoctl(fd.pfd.Sysfd, windows.SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
+		err = syscall.WSAIoctl(fd.pfd.Sysfd, windows.SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
+		if err != nil {
+			// SIO_UDP_NETRESET is not supported on Windows XP.
+			_ = err
+		}
 	}
 	return nil
 }
@@ -206,13 +212,9 @@ func (fd *netFD) accept() (*netFD, error) {
 	}
 
 	// Associate our new socket with IOCP.
-	netfd, err := newFD(s, fd.family, fd.sotype, fd.net)
-	if err != nil {
-		poll.CloseFunc(s)
-		return nil, err
-	}
+	netfd := newFD(s, fd.family, fd.sotype, fd.net)
 	if err := netfd.init(); err != nil {
-		fd.Close()
+		netfd.Close()
 		return nil, err
 	}
 

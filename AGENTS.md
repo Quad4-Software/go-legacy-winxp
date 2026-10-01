@@ -25,8 +25,8 @@ Default branch is `master`.
 
 ```
 VERSION                      Go version string for this tree
-patches/                     Ordered patch series (0001-0009 win7 lineage, 0010 XP)
-patches/0010-*.patch         Full XP delta versus current win7 base
+patches/                     Ordered patch series (win7 0001-0015, 9999, T0001-T0004, plus XP)
+patches/0010-Add-Windows-XP-support.patch  XP delta versus current win7 base
 src/                         Go source (already patched in-tree)
 scripts/xp-files.list        XP sources preserved across sync
 scripts/fork-files.list      Fork identity paths preserved across sync
@@ -35,6 +35,7 @@ scripts/regenerate-xp-patch.sh
 scripts/check-xp-pe.sh       Static PE 5.1 and forbidden-import checks
 scripts/test-xp-docker.sh
 docker/xp/                   dockurr/windows VERSION=xp smoke harness
+docker/build/                Toolchain container build
 testdata/xp-smoke/           Guest smoke program
 .github/workflows/           Release, XP test, and upstream watch
 skills/                      Task skills for maintenance agents
@@ -94,7 +95,7 @@ Read and follow these before the matching task:
 Sync onto a win7 tag (preserves XP + fork identity, regenerates `0010`):
 
 ```bash
-./scripts/scaffold-version.sh v1.27.0-2
+./scripts/scaffold-version.sh v1.27.1-1
 ```
 
 Regenerate XP patch only (needs matching win7 checkout):
@@ -123,7 +124,7 @@ Static XP checks (builds `windows/386` and `windows/amd64` smoke binaries):
 ./scripts/check-xp-pe.sh
 ```
 
-Live XP smoke test via Docker + KVM (`dockurr/windows`, `VERSION=xp`):
+Live XP smoke test via Docker (`dockurr/windows`, `VERSION=xp`, KVM or TCG):
 
 ```bash
 ./scripts/test-xp-docker.sh

@@ -558,23 +558,35 @@ func checkNetHTTPLocal() error {
 		}),
 	}
 	go srv.Serve(ln)
-	defer srv.Close()
+	defer func() { go srv.Close() }()
 
 	client := &http.Client{Timeout: 3 * time.Second}
 	url := "http://" + ln.Addr().String()
-	resp, err := client.Get(url)
-	if err != nil {
+	errc := make(chan error, 1)
+	go func() {
+		resp, err := client.Get(url)
+		if err != nil {
+			errc <- err
+			return
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			errc <- err
+			return
+		}
+		if string(body) != "http ok" {
+			errc <- fmt.Errorf("http body=%q", body)
+			return
+		}
+		errc <- nil
+	}()
+	select {
+	case err := <-errc:
 		return err
+	case <-time.After(8 * time.Second):
+		return fmt.Errorf("http get did not finish")
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if string(body) != "http ok" {
-		return fmt.Errorf("http body=%q", body)
-	}
-	return nil
 }
 
 func checkNetContextTimeout() error {

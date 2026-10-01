@@ -7,6 +7,7 @@ import (
 )
 
 func main() {
+	runtime.GOMAXPROCS(2)
 	fmt.Println("smoke: starting go-legacy-winxp guest checks")
 	fmt.Printf("go-legacy-winxp smoke ok version=%s goos=%s goarch=%s\n",
 		runtime.Version(), runtime.GOOS, runtime.GOARCH)

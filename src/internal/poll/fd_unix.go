@@ -148,7 +148,12 @@ func (fd *FD) Read(p []byte) (int, error) {
 		// without trying (but after acquiring the readLock).
 		// Otherwise syscall.Read returns 0, nil which looks like
 		// io.EOF.
-		// TODO(bradfitz): make it wait for readability? (Issue 15735)
+		//
+		// Waiting for readability instead was proposed in
+		// go.dev/cl/22031 and abandoned. Blocking would change
+		// the behavior of existing callers, and the netpoller's
+		// edge-triggered notifications alone cannot detect data
+		// that is already buffered. See go.dev/issue/15735.
 		return 0, nil
 	}
 	if err := fd.pd.prepareRead(fd.isFile); err != nil {
@@ -676,6 +681,12 @@ func (fd *FD) Dup() (int, string, error) {
 	}
 	defer fd.decref()
 	return DupCloseOnExec(fd.Sysfd)
+}
+
+// setDeadlineNoPoller reports that fd has nowhere to keep a deadline. Only
+// Windows keeps them outside the poller, for handles it leaves off it.
+func (fd *FD) setDeadlineNoPoller(d int64, mode int) error {
+	return ErrNoDeadline
 }
 
 // On Unix variants only, expose the IO event for the net code.

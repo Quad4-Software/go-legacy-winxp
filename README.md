@@ -34,17 +34,13 @@ Current release includes all [go-legacy-win7](https://github.com/thongtech/go-le
 - Fall back to `NtSetInformationFile` when `SetFileInformationByHandle` and `GetFinalPathNameByHandle` are unavailable
 - Includes all improvements and bug fixes from the corresponding upstream Go release
 
-Inherited from go-legacy-win7:
+Inherited from go-legacy-win7 1.27.1:
 
-- Switched back to `RtlGenRandom` from `ProcessPrng`
-- Added back `LoadLibraryA` fallback to load system libraries
-- Added back `sysSocket` fallback for socket syscalls
-- Added back Windows 7 console handle workaround
-- Added back 5ms sleep on Windows 7/8 in (\*Process).Wait
+- PE images default to Windows 7 (6.1) in the win7 parent, then this fork stamps 5.1 for XP
+- System DLLs load by absolute path where `LOAD_LIBRARY_SEARCH_SYSTEM32` is rejected
+- `ProcessPrng` falls back to `RtlGenRandom` when bcryptprimitives is missing
+- Console handle, directory info, socket inherit, and completion-port fallbacks from the win7 patch series
 - Restored deprecated `go get` behaviour for use outside modules
-- Reverted to the previous `removeall_noat` variant for Windows
-- Rolled back `race_windows.syso` to the previous compatible version
-- Added `FindFirstFile`/`FindNextFile` fallback for old SMB shares
 
 We provide two build options for Windows amd64:
 
@@ -111,6 +107,26 @@ After installation, verify the installation by opening a **new terminal** and ru
 ```
 go version
 ```
+
+The version string should report `go1.27.1` from this tree.
+
+### Docker toolchain build
+
+```
+docker build -f docker/build/Dockerfile -t go-legacy-winxp .
+```
+
+The image `go` binary is at `/usr/local/go-legacy-winxp/bin/go`.
+
+### Windows XP guest smoke test (Docker)
+
+```
+./scripts/test-xp-docker.sh
+```
+
+The guest UI is at `http://127.0.0.1:8006/` (noVNC). The test builds PE 5.1 smoke binaries, optionally builds [Reticulum-Go](https://github.com/Quad4-Software/Reticulum-Go) for `windows/386`, and runs both inside `dockurr/windows` `VERSION=xp`.
+
+On bare metal, QEMU uses KVM. Inside a nested hypervisor (or when the host KVM module oopses), the script falls back to TCG via `XP_KVM=N`. Force either mode with `XP_KVM=Y` or `XP_KVM=N`.
 
 ### Install From Source
 

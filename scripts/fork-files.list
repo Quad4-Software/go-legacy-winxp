@@ -6,6 +6,7 @@ AGENTS.md
 .github/workflows/xp-test.yml
 .github/workflows/watch-upstream.yml
 patches/0010-Add-Windows-XP-support.patch
+.gitignore
 scripts/
 docker/
 testdata/

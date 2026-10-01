@@ -187,10 +187,10 @@ func netpoll(delay int64) (gList, int32) {
 	} else {
 		wait = uint32(delay / 1e6)
 	}
+	n := 0
 	if delay != 0 {
 		mp.blocked = true
 	}
-	n := 0
 	if _GetQueuedCompletionStatusEx != nil {
 		nn := len(entries) / int(gomaxprocs)
 		if nn < 8 {

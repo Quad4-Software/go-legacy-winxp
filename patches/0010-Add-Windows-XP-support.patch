@@ -6,19 +6,25 @@ Preserve Windows XP compatibility: PE 5.1 targeting and dynamic
 loading of Vista+ APIs.
 ---
 diff --git a/src/cmd/link/internal/ld/pe.go b/src/cmd/link/internal/ld/pe.go
-index c90ce9e3..851f0646 100644
+index eab9a7f7..15c500eb 100644
 --- a/src/cmd/link/internal/ld/pe.go
 +++ b/src/cmd/link/internal/ld/pe.go
-@@ -152,7 +152,7 @@ const (
- )
+@@ -283,11 +283,10 @@ type IMAGE_LOAD_CONFIG_DIRECTORY64 struct {
  
+ // PeMinimumTargetMajorVersion and PeMinimumTargetMinorVersion are stamped
+ // into the PE image as the minimum operating system and subsystem version.
+-// Upstream Go uses 10.0. This fork uses 6.1, because the Windows 7 loader
+-// refuses to run an image whose subsystem version is newer than the
+-// running system.
++// Upstream Go uses 10.0. go-legacy-win7 uses 6.1. This fork uses 5.1 so
++// the Windows XP loader will start the image.
  const (
 -	PeMinimumTargetMajorVersion = 6
 +	PeMinimumTargetMajorVersion = 5
  	PeMinimumTargetMinorVersion = 1
  )
  
-@@ -1759,7 +1759,7 @@ func peCreateExportFile(ctxt *Link, libName string) (fname string) {
+@@ -1925,7 +1924,7 @@ func peCreateExportFile(ctxt *Link, libName string) (fname string) {
  	var buf bytes.Buffer
  
  	if ctxt.BuildMode == BuildModeCShared {
@@ -27,11 +33,40 @@ index c90ce9e3..851f0646 100644
  	}
  	buf.WriteString("EXPORTS\n")
  
+diff --git a/src/cmd/link/internal/ld/ld_test.go b/src/cmd/link/internal/ld/ld_test.go
+index 50d1aa3a..13cd64d1 100644
+--- a/src/cmd/link/internal/ld/ld_test.go
++++ b/src/cmd/link/internal/ld/ld_test.go
+@@ -292,7 +292,7 @@ func testWindowsBuildmodeCSharedASLR(t *testing.T, useASLR bool) {
+ 	}
+ }
+ 
+-// TestPEMinimumTargetVersion checks that cmd/link stamps the 6.1
++// TestPEMinimumTargetVersion checks that cmd/link stamps the 5.1
+ // minimum operating system and subsystem version. Both windows/386
+ // and windows/amd64 are built so that the 32-bit and 64-bit PE
+ // optional headers are covered whatever the host is.
+@@ -335,11 +335,11 @@ func TestPEMinimumTargetVersion(t *testing.T) {
+ 			default:
+ 				t.Fatalf("unexpected optional header type of %T", f.OptionalHeader)
+ 			}
+-			if osMajor != 6 || osMinor != 1 {
+-				t.Errorf("operating system version is %d.%d, want 6.1", osMajor, osMinor)
++			if osMajor != 5 || osMinor != 1 {
++				t.Errorf("operating system version is %d.%d, want 5.1", osMajor, osMinor)
+ 			}
+-			if subMajor != 6 || subMinor != 1 {
+-				t.Errorf("subsystem version is %d.%d, want 6.1", subMajor, subMinor)
++			if subMajor != 5 || subMinor != 1 {
++				t.Errorf("subsystem version is %d.%d, want 5.1", subMajor, subMinor)
+ 			}
+ 		})
+ 	}
 diff --git a/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go b/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
-index f25b7308..96044839 100644
+index 192d1930..86027c3c 100644
 --- a/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
 +++ b/src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
-@@ -1759,6 +1759,9 @@ func CancelIo(s Handle) (err error) {
+@@ -1799,6 +1799,9 @@ func CancelIo(s Handle) (err error) {
  }
  
  func CancelIoEx(s Handle, o *Overlapped) (err error) {
@@ -41,7 +76,7 @@ index f25b7308..96044839 100644
  	r1, _, e1 := syscall.SyscallN(procCancelIoEx.Addr(), uintptr(s), uintptr(unsafe.Pointer(o)))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -1966,6 +1969,9 @@ func DeleteFile(path *uint16) (err error) {
+@@ -2006,6 +2009,9 @@ func DeleteFile(path *uint16) (err error) {
  }
  
  func deleteProcThreadAttributeList(attrlist *ProcThreadAttributeList) {
@@ -51,7 +86,27 @@ index f25b7308..96044839 100644
  	syscall.SyscallN(procDeleteProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)))
  	return
  }
-@@ -2779,6 +2785,13 @@ func getWindowsDirectory(dir *uint16, dirLen uint32) (len uint32, err error) {
+@@ -2430,6 +2436,9 @@ func GetFileInformationByHandle(handle Handle, data *ByHandleFileInformation) (e
+ }
+ 
+ func GetFileInformationByHandleEx(handle Handle, class uint32, outBuffer *byte, outBufferLen uint32) (err error) {
++	if err := procGetFileInformationByHandleEx.Find(); err != nil {
++		return err
++	}
+ 	r1, _, e1 := syscall.SyscallN(procGetFileInformationByHandleEx.Addr(), uintptr(handle), uintptr(class), uintptr(unsafe.Pointer(outBuffer)), uintptr(outBufferLen))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -2455,6 +2464,9 @@ func GetFileType(filehandle Handle) (n uint32, err error) {
+ }
+ 
+ func GetFinalPathNameByHandle(file Handle, filePath *uint16, filePathSize uint32, flags uint32) (n uint32, err error) {
++	if err := procGetFinalPathNameByHandleW.Find(); err != nil {
++		return 0, err
++	}
+ 	r0, _, e1 := syscall.SyscallN(procGetFinalPathNameByHandleW.Addr(), uintptr(file), uintptr(unsafe.Pointer(filePath)), uintptr(filePathSize), uintptr(flags))
+ 	n = uint32(r0)
+ 	if n == 0 {
+@@ -2819,6 +2831,13 @@ func getWindowsDirectory(dir *uint16, dirLen uint32) (len uint32, err error) {
  }
  
  func initializeProcThreadAttributeList(attrlist *ProcThreadAttributeList, attrcount uint32, flags uint32, size *uintptr) (err error) {
@@ -65,7 +120,27 @@ index f25b7308..96044839 100644
  	r1, _, e1 := syscall.SyscallN(procInitializeProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)), uintptr(attrcount), uintptr(flags), uintptr(unsafe.Pointer(size)))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -3492,6 +3505,9 @@ func UnmapViewOfFile(addr uintptr) (err error) {
+@@ -3337,6 +3356,9 @@ func SetFileAttributes(name *uint16, attrs uint32) (err error) {
+ }
+ 
+ func SetFileCompletionNotificationModes(handle Handle, flags uint8) (err error) {
++	if err := procSetFileCompletionNotificationModes.Find(); err != nil {
++		return err
++	}
+ 	r1, _, e1 := syscall.SyscallN(procSetFileCompletionNotificationModes.Addr(), uintptr(handle), uintptr(flags))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -3345,6 +3367,9 @@ func SetFileCompletionNotificationModes(handle Handle, flags uint8) (err error)
+ }
+ 
+ func SetFileInformationByHandle(handle Handle, class uint32, inBuffer *byte, inBufferLen uint32) (err error) {
++	if err := procSetFileInformationByHandle.Find(); err != nil {
++		return err
++	}
+ 	r1, _, e1 := syscall.SyscallN(procSetFileInformationByHandle.Addr(), uintptr(handle), uintptr(class), uintptr(unsafe.Pointer(inBuffer)), uintptr(inBufferLen))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -3538,6 +3563,9 @@ func UnmapViewOfFile(addr uintptr) (err error) {
  }
  
  func updateProcThreadAttribute(attrlist *ProcThreadAttributeList, flags uint32, attr uintptr, value unsafe.Pointer, size uintptr, prevvalue unsafe.Pointer, returnedsize *uintptr) (err error) {
@@ -76,10 +151,10 @@ index f25b7308..96044839 100644
  	if r1 == 0 {
  		err = errnoErr(e1)
 diff --git a/src/internal/runtime/syscall/windows/defs_windows.go b/src/internal/runtime/syscall/windows/defs_windows.go
-index 6b109809..5daf00d9 100644
+index 9861e764..dc40b9bf 100644
 --- a/src/internal/runtime/syscall/windows/defs_windows.go
 +++ b/src/internal/runtime/syscall/windows/defs_windows.go
-@@ -71,6 +71,8 @@ const INFINITE = 0xffffffff
+@@ -75,6 +75,8 @@ const INFINITE = 0xffffffff
  
  const WAIT_TIMEOUT = 258
  
@@ -88,82 +163,8 @@ index 6b109809..5daf00d9 100644
  const FAIL_FAST_GENERATE_EXCEPTION_ADDRESS = 0x1
  
  const (
-diff --git a/src/internal/syscall/windows/at_windows.go b/src/internal/syscall/windows/at_windows.go
-index 81361c98..db275ae9 100644
---- a/src/internal/syscall/windows/at_windows.go
-+++ b/src/internal/syscall/windows/at_windows.go
-@@ -325,40 +325,54 @@ var TestDeleteatFallback bool
- // for compatibility with older Windows versions and file systems
- // over performance.
- func deleteatFallback(h syscall.Handle) error {
-+	const (
-+		fileBasicInformationClass        = 4
-+		fileDispositionInformationClass  = 13
-+	)
-+
- 	var data syscall.ByHandleFileInformation
- 	if err := syscall.GetFileInformationByHandle(h, &data); err == nil && data.FileAttributes&syscall.FILE_ATTRIBUTE_READONLY != 0 {
--		// Remove read-only attribute. Reopen the file, as it was previously open without FILE_WRITE_ATTRIBUTES access
--		// in order to maximize compatibility in the happy path.
-+		clearHandle := h
-+		reopened := false
- 		wh, err := ReOpenFile(h,
- 			FILE_WRITE_ATTRIBUTES,
- 			FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
- 			syscall.FILE_FLAG_OPEN_REPARSE_POINT|syscall.FILE_FLAG_BACKUP_SEMANTICS,
- 		)
--		if err != nil {
--			return err
-+		if err == nil {
-+			clearHandle = wh
-+			reopened = true
- 		}
--		err = SetFileInformationByHandle(
--			wh,
--			FileBasicInfo,
--			unsafe.Pointer(&FILE_BASIC_INFO{
-+		err = NtSetInformationFile(
-+			clearHandle,
-+			&IO_STATUS_BLOCK{},
-+			unsafe.Pointer(&fileBasicInformation{
- 				FileAttributes: data.FileAttributes &^ FILE_ATTRIBUTE_READONLY,
- 			}),
--			uint32(unsafe.Sizeof(FILE_BASIC_INFO{})),
-+			uint32(unsafe.Sizeof(fileBasicInformation{})),
-+			fileBasicInformationClass,
- 		)
--		syscall.CloseHandle(wh)
-+		if reopened {
-+			syscall.CloseHandle(wh)
-+		}
- 		if err != nil {
--			return err
-+			return err.(NTStatus).Errno()
- 		}
- 	}
- 
--	return SetFileInformationByHandle(
-+	err := NtSetInformationFile(
- 		h,
--		FileDispositionInfo,
--		unsafe.Pointer(&FILE_DISPOSITION_INFO{
-+		&IO_STATUS_BLOCK{},
-+		unsafe.Pointer(&FILE_DISPOSITION_INFORMATION{
- 			DeleteFile: true,
- 		}),
--		uint32(unsafe.Sizeof(FILE_DISPOSITION_INFO{})),
-+		uint32(unsafe.Sizeof(FILE_DISPOSITION_INFORMATION{})),
-+		fileDispositionInformationClass,
- 	)
-+	if err != nil {
-+		return err.(NTStatus).Errno()
-+	}
-+	return nil
- }
- 
- func Renameat(olddirfd syscall.Handle, oldpath string, newdirfd syscall.Handle, newpath string) error {
 diff --git a/src/internal/syscall/windows/syscall_windows.go b/src/internal/syscall/windows/syscall_windows.go
-index 9f3ea26c..aecc75a6 100644
+index 8bec5c50..10336511 100644
 --- a/src/internal/syscall/windows/syscall_windows.go
 +++ b/src/internal/syscall/windows/syscall_windows.go
 @@ -417,6 +417,10 @@ func ErrorLoadingGetTempPath2() error {
@@ -177,6 +178,22 @@ index 9f3ea26c..aecc75a6 100644
  //sys	CreateEnvironmentBlock(block **uint16, token syscall.Token, inheritExisting bool) (err error) = userenv.CreateEnvironmentBlock
  //sys	DestroyEnvironmentBlock(block *uint16) (err error) = userenv.DestroyEnvironmentBlock
  //sys	CreateEvent(eventAttrs *SecurityAttributes, manualReset uint32, initialState uint32, name *uint16) (handle syscall.Handle, err error) = kernel32.CreateEventW
+@@ -573,6 +577,15 @@ const (
+ 	STATUS_INVALID_PARAMETER         NTStatus = 0xC000000D
+ 	STATUS_INVALID_INFO_CLASS        NTStatus = 0xC0000003
+ 	STATUS_ACCESS_DENIED             NTStatus = 0xC0000022
++	STATUS_NO_SUCH_FILE              NTStatus = 0xC000000F
++	STATUS_NO_MORE_FILES             NTStatus = 0x80000006
++)
++
++// NtQueryDirectoryFile FileInformationClass values used by the
++// GetFileInformationByHandleEx fallback on kernels that lack that API.
++const (
++	fileFullDirectoryInformation   = 2
++	fileIdBothDirectoryInformation = 37
+ )
+ 
+ const (
 diff --git a/src/internal/syscall/windows/symlink_windows.go b/src/internal/syscall/windows/symlink_windows.go
 index b8249b38..ca5a92ea 100644
 --- a/src/internal/syscall/windows/symlink_windows.go
@@ -190,11 +207,11 @@ index b8249b38..ca5a92ea 100644
  	FileCompressionInfo            = 8    // FILE_COMPRESSION_INFO
  	FileAttributeTagInfo           = 9    // FILE_ATTRIBUTE_TAG_INFO
 diff --git a/src/internal/syscall/windows/types_windows.go b/src/internal/syscall/windows/types_windows.go
-index 21aeb8fa..0c9d36f0 100644
+index 55ab0a44..5947e242 100644
 --- a/src/internal/syscall/windows/types_windows.go
 +++ b/src/internal/syscall/windows/types_windows.go
 @@ -222,6 +222,11 @@ type FILE_DISPOSITION_INFO struct {
- 	DeleteFile bool
+ 	DeleteFile byte
  }
  
 +// https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_end_of_file_info
@@ -204,22 +221,83 @@ index 21aeb8fa..0c9d36f0 100644
 +
  // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_file_disposition_information
  type FILE_DISPOSITION_INFORMATION struct {
- 	DeleteFile bool
+ 	DeleteFile byte
 diff --git a/src/internal/syscall/windows/zsyscall_windows.go b/src/internal/syscall/windows/zsyscall_windows.go
-index 26c66cfd..5da6bc75 100644
+index 53e9beac..587665c3 100644
 --- a/src/internal/syscall/windows/zsyscall_windows.go
 +++ b/src/internal/syscall/windows/zsyscall_windows.go
-@@ -347,6 +347,9 @@ func GetCurrentThread() (pseudoHandle syscall.Handle, err error) {
+@@ -105,6 +105,7 @@ var (
+ 	procNetUserGetLocalGroups             = modnetapi32.NewProc("NetUserGetLocalGroups")
+ 	procNtCreateFile                      = modntdll.NewProc("NtCreateFile")
+ 	procNtOpenFile                        = modntdll.NewProc("NtOpenFile")
++	procNtQueryDirectoryFile              = modntdll.NewProc("NtQueryDirectoryFile")
+ 	procNtQueryInformationFile            = modntdll.NewProc("NtQueryInformationFile")
+ 	procNtSetInformationFile              = modntdll.NewProc("NtSetInformationFile")
+ 	procRtlGetVersion                     = modntdll.NewProc("RtlGetVersion")
+@@ -364,6 +365,9 @@ func GetCurrentThread() (pseudoHandle syscall.Handle, err error) {
  }
  
  func GetFileInformationByHandleEx(handle syscall.Handle, class uint32, info *byte, bufsize uint32) (err error) {
 +	if err := procGetFileInformationByHandleEx.Find(); err != nil {
-+		return ERROR_NOT_SUPPORTED
++		return getFileInformationByHandleExFallback(handle, class, info, bufsize)
 +	}
  	r1, _, e1 := syscall.SyscallN(procGetFileInformationByHandleEx.Addr(), uintptr(handle), uintptr(class), uintptr(unsafe.Pointer(info)), uintptr(bufsize))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -363,6 +366,9 @@ func GetFileSizeEx(handle syscall.Handle, size *int64) (err error) {
+@@ -371,6 +375,52 @@ func GetFileInformationByHandleEx(handle syscall.Handle, class uint32, info *byt
+ 	return
+ }
+ 
++func NtQueryDirectoryFile(handle syscall.Handle, event syscall.Handle, apcRoutine uintptr, apcContext uintptr, iosb *IO_STATUS_BLOCK, buf unsafe.Pointer, length uint32, class uint32, singleEntry uint32, fileName unsafe.Pointer, restart uint32) (ntstatus error) {
++	r0, _, _ := syscall.SyscallN(procNtQueryDirectoryFile.Addr(), uintptr(handle), uintptr(event), apcRoutine, apcContext, uintptr(unsafe.Pointer(iosb)), uintptr(buf), uintptr(length), uintptr(class), uintptr(singleEntry), uintptr(fileName), uintptr(restart))
++	if r0 != 0 {
++		ntstatus = NTStatus(r0)
++	}
++	return
++}
++
++func getFileInformationByHandleExFallback(handle syscall.Handle, class uint32, info *byte, bufsize uint32) error {
++	var ntClass uint32
++	restart := uint32(0)
++	switch class {
++	case FileFullDirectoryInfo:
++		ntClass = fileFullDirectoryInformation
++	case FileFullDirectoryRestartInfo:
++		ntClass = fileFullDirectoryInformation
++		restart = 1
++	case FileIdBothDirectoryInfo:
++		ntClass = fileIdBothDirectoryInformation
++	case FileIdBothDirectoryRestartInfo:
++		ntClass = fileIdBothDirectoryInformation
++		restart = 1
++	default:
++		return syscall.EWINDOWS
++	}
++	var iosb IO_STATUS_BLOCK
++	err := NtQueryDirectoryFile(handle, 0, 0, 0, &iosb, unsafe.Pointer(info), bufsize, ntClass, 0, nil, restart)
++	if err == nil {
++		return nil
++	}
++	st, ok := err.(NTStatus)
++	if !ok {
++		return err
++	}
++	switch st {
++	case STATUS_NO_MORE_FILES:
++		return syscall.ERROR_NO_MORE_FILES
++	case STATUS_NO_SUCH_FILE:
++		return syscall.ERROR_FILE_NOT_FOUND
++	case STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER, STATUS_NOT_SUPPORTED:
++		return ERROR_INVALID_PARAMETER
++	default:
++		return st.Errno()
++	}
++}
++
+ func GetFileSizeEx(handle syscall.Handle, size *int64) (err error) {
+ 	r1, _, e1 := syscall.SyscallN(procGetFileSizeEx.Addr(), uintptr(handle), uintptr(unsafe.Pointer(size)))
+ 	if r1 == 0 {
+@@ -380,6 +430,9 @@ func GetFileSizeEx(handle syscall.Handle, size *int64) (err error) {
  }
  
  func GetFinalPathNameByHandle(file syscall.Handle, filePath *uint16, filePathSize uint32, flags uint32) (n uint32, err error) {
@@ -229,7 +307,7 @@ index 26c66cfd..5da6bc75 100644
  	r0, _, e1 := syscall.SyscallN(procGetFinalPathNameByHandleW.Addr(), uintptr(file), uintptr(unsafe.Pointer(filePath)), uintptr(filePathSize), uintptr(flags))
  	n = uint32(r0)
  	if n == 0 {
-@@ -402,6 +408,9 @@ func GetOverlappedResult(handle syscall.Handle, overlapped *syscall.Overlapped,
+@@ -419,6 +472,9 @@ func GetOverlappedResult(handle syscall.Handle, overlapped *syscall.Overlapped,
  }
  
  func GetTempPath2(buflen uint32, buf *uint16) (n uint32, err error) {
@@ -239,7 +317,7 @@ index 26c66cfd..5da6bc75 100644
  	r0, _, e1 := syscall.SyscallN(procGetTempPath2W.Addr(), uintptr(buflen), uintptr(unsafe.Pointer(buf)))
  	n = uint32(r0)
  	if n == 0 {
-@@ -411,6 +420,9 @@ func GetTempPath2(buflen uint32, buf *uint16) (n uint32, err error) {
+@@ -428,6 +484,9 @@ func GetTempPath2(buflen uint32, buf *uint16) (n uint32, err error) {
  }
  
  func GetVolumeInformationByHandle(file syscall.Handle, volumeNameBuffer *uint16, volumeNameSize uint32, volumeNameSerialNumber *uint32, maximumComponentLength *uint32, fileSystemFlags *uint32, fileSystemNameBuffer *uint16, fileSystemNameSize uint32) (err error) {
@@ -249,17 +327,17 @@ index 26c66cfd..5da6bc75 100644
  	r1, _, e1 := syscall.SyscallN(procGetVolumeInformationByHandleW.Addr(), uintptr(file), uintptr(unsafe.Pointer(volumeNameBuffer)), uintptr(volumeNameSize), uintptr(unsafe.Pointer(volumeNameSerialNumber)), uintptr(unsafe.Pointer(maximumComponentLength)), uintptr(unsafe.Pointer(fileSystemFlags)), uintptr(unsafe.Pointer(fileSystemNameBuffer)), uintptr(fileSystemNameSize))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -468,6 +480,9 @@ func MultiByteToWideChar(codePage uint32, dwFlags uint32, str *byte, nstr int32,
+@@ -491,6 +550,9 @@ func MultiByteToWideChar(codePage uint32, dwFlags uint32, str *byte, nstr int32,
  }
  
  func ReOpenFile(filehandle syscall.Handle, desiredAccess uint32, shareMode uint32, flagAndAttributes uint32) (handle syscall.Handle, err error) {
 +	if err := procReOpenFile.Find(); err != nil {
-+		return syscall.InvalidHandle, ERROR_NOT_SUPPORTED
++		return syscall.InvalidHandle, syscall.EWINDOWS
 +	}
  	r0, _, e1 := syscall.SyscallN(procReOpenFile.Addr(), uintptr(filehandle), uintptr(desiredAccess), uintptr(shareMode), uintptr(flagAndAttributes))
  	handle = syscall.Handle(r0)
  	if handle == syscall.InvalidHandle {
-@@ -489,6 +504,18 @@ func RtlVirtualUnwind(handlerType uint32, baseAddress uintptr, pc uintptr, entry
+@@ -520,6 +582,18 @@ func SetEvent(event syscall.Handle) (err error) {
  }
  
  func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint32, buf unsafe.Pointer, bufsize uint32) (err error) {
@@ -278,7 +356,7 @@ index 26c66cfd..5da6bc75 100644
  	r1, _, e1 := syscall.SyscallN(procSetFileInformationByHandle.Addr(), uintptr(handle), uintptr(fileInformationClass), uintptr(buf), uintptr(bufsize))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -496,6 +523,55 @@ func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint
+@@ -527,6 +601,55 @@ func SetFileInformationByHandle(handle syscall.Handle, fileInformationClass uint
  	return
  }
  
@@ -334,58 +412,251 @@ index 26c66cfd..5da6bc75 100644
  func UnlockFileEx(file syscall.Handle, reserved uint32, bytesLow uint32, bytesHigh uint32, overlapped *syscall.Overlapped) (err error) {
  	r1, _, e1 := syscall.SyscallN(procUnlockFileEx.Addr(), uintptr(file), uintptr(reserved), uintptr(bytesLow), uintptr(bytesHigh), uintptr(unsafe.Pointer(overlapped)))
  	if r1 == 0 {
+diff --git a/src/internal/poll/fd_windows.go b/src/internal/poll/fd_windows.go
+index b452d393..9ecaa64a 100644
+--- a/src/internal/poll/fd_windows.go
++++ b/src/internal/poll/fd_windows.go
+@@ -23,6 +23,10 @@ var (
+ 	ioSync  uint64
+ )
+ 
++var hasCancelIoEx = sync.OnceValue(func() bool {
++	return syscall.LoadCancelIoEx() == nil
++})
++
+ // ifsHandlesOnly returns true if the system only has IFS handles for TCP sockets.
+ // See https://support.microsoft.com/kb/2568167 for details.
+ var ifsHandlesOnly = sync.OnceValue(func() bool {
+@@ -260,8 +264,9 @@ func (fd *FD) waitIO(o *operation) error {
+ 		// ERROR_NOT_FOUND can be returned when the request succeded
+ 		// between the time wait returned and CancelIoEx was executed.
+ 		if err := syscall.CancelIoEx(fd.Sysfd, &o.o); err != nil && err != syscall.ERROR_NOT_FOUND {
+-			// TODO(brainman): maybe do something else, but panic.
+-			panic(err)
++			if hasCancelIoEx() {
++				panic(err)
++			}
+ 		}
+ 		fd.pd.waitCanceled(int(o.mode))
+ 	default:
+@@ -325,7 +330,10 @@ func (fd *FD) execIO(
+ 			defer syscall.CloseHandle(h)
+ 		}
+ 	}
+-	// Start IO.
++	if !hasCancelIoEx() && !fd.associated && !fd.isBlocking {
++		runtime.LockOSThread()
++		defer runtime.UnlockOSThread()
++	}
+ 	qty, err := submit(o)
+ 	var waitErr error
+ 	// Blocking operations shouldn't return ERROR_IO_PENDING.
+@@ -498,29 +506,16 @@ func (fd *FD) Init(net string, pollable bool) error {
+ 	// behavior below, as it requires an extra syscall.
+ 	fd.waitOnSuccess = true
+ 
+-	if fd.kind != kindNet && !canDetachFromIOCP() {
+-		// See canDetachFromIOCP. Leave the handle off the completion port
+-		// and drive it with an event for each operation, keeping the
+-		// deadlines here rather than in the poller. A socket keeps the
+-		// poller, which is what lets one process serve more connections
+-		// than it has threads. Conn.File does hand a socket handle out,
+-		// and on such a kernel that handle cannot leave the port, which
+-		// is the price of keeping it.
++	if !hasCancelIoEx() || (fd.kind != kindNet && !canDetachFromIOCP()) {
+ 		if err := fd.initDeadlineEvents(); err != nil {
+ 			return err
+ 		}
+ 	} else {
+-		// It is safe to add overlapped handles that also perform I/O
+-		// outside of the runtime poller. The runtime poller will ignore
+-		// I/O completion notifications not initiated by us.
+ 		err := fd.pd.init(fd)
+ 		if err != nil {
+ 			if err != windows.ERROR_INVALID_PARAMETER || canDetachFromIOCP() {
+ 				return err
+ 			}
+-			// The handle came from a socket that is already on a completion
+-			// port, and this kernel cannot move it. Leave it where it is and
+-			// drive it with an event. See canDetachFromIOCP.
+ 			return nil
+ 		}
+ 		fd.associated = true
+@@ -659,8 +654,9 @@ func (fd *FD) waitEventIO(o *operation) error {
+ // why it was stopped.
+ func (fd *FD) cancelEventIO(o *operation, why error) error {
+ 	if err := syscall.CancelIoEx(fd.Sysfd, &o.o); err != nil && err != syscall.ERROR_NOT_FOUND {
+-		// TODO(brainman): maybe do something else, but panic.
+-		panic(err)
++		if hasCancelIoEx() {
++			panic(err)
++		}
+ 	}
+ 	syscall.WaitForSingleObject(o.o.HEvent, syscall.INFINITE)
+ 	return why
 diff --git a/src/net/fd_windows.go b/src/net/fd_windows.go
-index c28ce045..a8d451a2 100644
+index 5171dcaa..a4426f92 100644
 --- a/src/net/fd_windows.go
 +++ b/src/net/fd_windows.go
-@@ -60,22 +60,17 @@ func (fd *netFD) init() error {
- 	case "udp", "udp4", "udp6":
- 		// Disable reporting of PORT_UNREACHABLE errors.
- 		// See https://go.dev/issue/5834.
-+		// SIO_UDP_CONNRESET and SIO_UDP_NETRESET are not supported on Windows XP.
- 		ret := uint32(0)
- 		flag := uint32(0)
+@@ -64,7 +64,8 @@ func (fd *netFD) init() error {
  		size := uint32(unsafe.Sizeof(flag))
--		err := syscall.WSAIoctl(fd.pfd.Sysfd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
--		if err != nil {
+ 		err := syscall.WSAIoctl(fd.pfd.Sysfd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
+ 		if err != nil {
 -			return wrapSyscallError("wsaioctl", err)
--		}
-+		_ = syscall.WSAIoctl(fd.pfd.Sysfd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
++			// SIO_UDP_CONNRESET is not supported on Windows XP.
++			_ = err
+ 		}
  		// Disable reporting of NET_UNREACHABLE errors.
  		// See https://go.dev/issue/68614.
- 		ret = 0
- 		flag = 0
+@@ -73,7 +74,8 @@ func (fd *netFD) init() error {
  		size = uint32(unsafe.Sizeof(flag))
--		err = syscall.WSAIoctl(fd.pfd.Sysfd, windows.SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
--		if err != nil {
+ 		err = syscall.WSAIoctl(fd.pfd.Sysfd, windows.SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
+ 		if err != nil {
 -			return wrapSyscallError("wsaioctl", err)
--		}
-+		_ = syscall.WSAIoctl(fd.pfd.Sysfd, windows.SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
++			// SIO_UDP_NETRESET is not supported on Windows XP.
++			_ = err
+ 		}
  	}
  	return nil
- }
 diff --git a/src/os/dir_windows.go b/src/os/dir_windows.go
-index 0a56de0a..85238c53 100644
+index 556a7cdb..1d236f5a 100644
 --- a/src/os/dir_windows.go
 +++ b/src/os/dir_windows.go
-@@ -144,10 +144,11 @@ func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []Di
- 					// [1] https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/fa8194e0-53ec-413b-8315-e8fa85396fd8
+@@ -140,6 +140,12 @@ func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []Di
+ 					d.buf = nil
  					break
  				}
--				if (err == windows.ERROR_INVALID_PARAMETER || err == windows.ERROR_NOT_SUPPORTED) &&
-+				if (err == windows.ERROR_INVALID_PARAMETER || err == windows.ERROR_NOT_SUPPORTED || err == syscall.EWINDOWS) &&
- 					(d.class == windows.FileFullDirectoryRestartInfo || d.class == windows.FileFullDirectoryInfo) {
- 					// Even FileFullDirectoryRestartInfo is not supported by very old SMB shares.
- 					// This is common with Windows 7 accessing SMB 1.0 shares.
-+					// GetFileInformationByHandleEx is also missing on Windows XP (returns EWINDOWS).
- 					// Use FindFirstFile/FindNextFile as the final fallback.
- 					dirBufPool.Put(d.buf)
- 					d.buf = nil
++				if err == syscall.EWINDOWS || err == windows.ERROR_NOT_SUPPORTED {
++					// GetFileInformationByHandleEx is missing on Windows XP.
++					dirBufPool.Put(d.buf)
++					d.buf = nil
++					return readDirFindFirstFile(file, n, wantAll, mode)
++				}
+ 				if err == windows.ERROR_INVALID_PARAMETER && d.class == windows.FileFullDirectoryRestartInfo {
+ 					// This kernel does not know FILE_FULL_DIR_INFO, which
+ 					// every Windows before 8 lacks. Read this directory
+@@ -148,6 +154,13 @@ func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []Di
+ 					d.class = windows.FileIdBothDirectoryRestartInfo
+ 					continue
+ 				}
++				if err == windows.ERROR_INVALID_PARAMETER &&
++					(d.class == windows.FileIdBothDirectoryRestartInfo || d.class == windows.FileIdBothDirectoryInfo) {
++					// Even FileIdBothDirectoryRestartInfo is rejected on very old SMB shares.
++					dirBufPool.Put(d.buf)
++					d.buf = nil
++					return readDirFindFirstFile(file, n, wantAll, mode)
++				}
+ 				if err == syscall.ERROR_FILE_NOT_FOUND &&
+ 					(d.class == windows.FileIdBothDirectoryRestartInfo || d.class == windows.FileFullDirectoryRestartInfo) {
+ 					// GetFileInformationByHandleEx doesn't document the return error codes when the info class is FileIdBothDirectoryRestartInfo,
+@@ -233,6 +246,88 @@ func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []Di
+ 	return names, dirents, infos, nil
+ }
+ 
++// readDirFindFirstFile is a fallback for Windows XP and old SMB shares that
++// do not support GetFileInformationByHandleEx with any directory info class.
++func readDirFindFirstFile(file *File, n int, wantAll bool, mode readdirMode) (names []string, dirents []DirEntry, infos []FileInfo, err error) {
++	d := file.dirinfo.Load()
++
++	searchPath := file.name
++	if searchPath == "" {
++		return nil, nil, nil, &PathError{Op: "readdir", Path: file.name, Err: syscall.EINVAL}
++	}
++	if searchPath[len(searchPath)-1] != '\\' && searchPath[len(searchPath)-1] != '/' {
++		searchPath += `\`
++	}
++	searchPath += "*"
++
++	searchPathPtr, err := syscall.UTF16PtrFromString(searchPath)
++	if err != nil {
++		return nil, nil, nil, &PathError{Op: "FindFirstFile", Path: file.name, Err: err}
++	}
++
++	var fd syscall.Win32finddata
++	h, err := syscall.FindFirstFile(searchPathPtr, &fd)
++	if err != nil {
++		if err == syscall.ERROR_FILE_NOT_FOUND {
++			if !winPathIsAbs(file.name) {
++				return nil, nil, nil, &PathError{Op: "FindFirstFile", Path: file.name, Err: err}
++			}
++			return nil, nil, nil, nil
++		}
++		return nil, nil, nil, &PathError{Op: "FindFirstFile", Path: file.name, Err: err}
++	}
++	defer syscall.FindClose(h)
++
++	for {
++		name := syscall.UTF16ToString(fd.FileName[:])
++		if name == "." || name == ".." {
++			if err = syscall.FindNextFile(h, &fd); err != nil {
++				if err == syscall.ERROR_NO_MORE_FILES {
++					break
++				}
++				return names, dirents, infos, &PathError{Op: "FindNextFile", Path: file.name, Err: err}
++			}
++			continue
++		}
++
++		if mode == readdirName {
++			names = append(names, name)
++		} else {
++			f := newFileStatFromWin32finddata(&fd)
++			f.name = name
++			if d != nil {
++				f.vol = d.vol
++				if d.path != "" {
++					f.appendNameToPath = true
++					f.path = d.path
++				}
++			}
++			if mode == readdirDirEntry {
++				dirents = append(dirents, dirEntry{f})
++			} else {
++				infos = append(infos, f)
++			}
++		}
++
++		n--
++		if !wantAll && n == 0 {
++			break
++		}
++
++		if err = syscall.FindNextFile(h, &fd); err != nil {
++			if err == syscall.ERROR_NO_MORE_FILES {
++				break
++			}
++			return names, dirents, infos, &PathError{Op: "FindNextFile", Path: file.name, Err: err}
++		}
++	}
++
++	if !wantAll && len(names)+len(dirents)+len(infos) == 0 {
++		return nil, nil, nil, io.EOF
++	}
++	return names, dirents, infos, nil
++}
++
+ type dirEntry struct {
+ 	fs *fileStat
+ }
+@@ -245,3 +340,13 @@ func (de dirEntry) Info() (FileInfo, error) { return de.fs, nil }
+ func (de dirEntry) String() string {
+ 	return fs.FormatDirEntry(de)
+ }
++
++func winPathIsAbs(p string) bool {
++	if p == "" {
++		return false
++	}
++	if p[0] == '\\' || p[0] == '/' {
++		return true
++	}
++	return len(p) >= 2 && p[1] == ':'
++}
 diff --git a/src/os/file_windows.go b/src/os/file_windows.go
-index 8f0827a2..3c45d2d6 100644
+index 9b4450bb..f7d691f5 100644
 --- a/src/os/file_windows.go
 +++ b/src/os/file_windows.go
-@@ -429,7 +429,7 @@ func normaliseLinkPath(path string) (string, error) {
+@@ -456,7 +456,7 @@ func normaliseLinkPath(path string) (string, error) {
  	}
  
  	// \??\Volume{abc}\
@@ -414,7 +685,7 @@ index 34648e79..dd28fffa 100644
  
  	return &fileStat{
 diff --git a/src/runtime/netpoll_windows.go b/src/runtime/netpoll_windows.go
-index db5d0435..98d61a05 100644
+index db5d0435..1745a352 100644
 --- a/src/runtime/netpoll_windows.go
 +++ b/src/runtime/netpoll_windows.go
 @@ -187,21 +187,48 @@ func netpoll(delay int64) (gList, int32) {
@@ -425,6 +696,7 @@ index db5d0435..98d61a05 100644
 -	if n < 8 {
 -		n = 8
 -	}
++	n := 0
  	if delay != 0 {
  		mp.blocked = true
  	}
@@ -433,7 +705,6 @@ index db5d0435..98d61a05 100644
 -		errno := getlasterror()
 -		if errno == windows.WAIT_TIMEOUT {
 -			return gList{}, 0
-+	n := 0
 +	if _GetQueuedCompletionStatusEx != nil {
 +		nn := len(entries) / int(gomaxprocs)
 +		if nn < 8 {
@@ -478,10 +749,10 @@ index db5d0435..98d61a05 100644
  	mp.blocked = false
  	delta := int32(0)
 diff --git a/src/runtime/os_windows.go b/src/runtime/os_windows.go
-index 2c5d22ef..18cc3f31 100644
+index f7b0583c..fd5d4874 100644
 --- a/src/runtime/os_windows.go
 +++ b/src/runtime/os_windows.go
-@@ -17,24 +17,20 @@ const (
+@@ -17,24 +17,21 @@ const (
  	_NSIG = 65
  )
  
@@ -503,10 +774,11 @@ index 2c5d22ef..18cc3f31 100644
  //go:cgo_import_dynamic runtime._GetProcAddress GetProcAddress%2 "kernel32.dll"
  //go:cgo_import_dynamic runtime._GetProcessAffinityMask GetProcessAffinityMask%3 "kernel32.dll"
 -//go:cgo_import_dynamic runtime._GetQueuedCompletionStatusEx GetQueuedCompletionStatusEx%6 "kernel32.dll"
++//go:cgo_import_dynamic runtime._GetQueuedCompletionStatus GetQueuedCompletionStatus%5 "kernel32.dll"
  //go:cgo_import_dynamic runtime._GetStdHandle GetStdHandle%1 "kernel32.dll"
  //go:cgo_import_dynamic runtime._GetSystemDirectoryA GetSystemDirectoryA%2 "kernel32.dll"
- //go:cgo_import_dynamic runtime._GetSystemInfo GetSystemInfo%1 "kernel32.dll"
-@@ -45,7 +41,6 @@ const (
+ //go:cgo_import_dynamic runtime._GetSystemDirectoryW GetSystemDirectoryW%2 "kernel32.dll"
+@@ -46,7 +43,6 @@ const (
  //go:cgo_import_dynamic runtime._PostQueuedCompletionStatus PostQueuedCompletionStatus%4 "kernel32.dll"
  //go:cgo_import_dynamic runtime._QueryPerformanceCounter QueryPerformanceCounter%1 "kernel32.dll"
  //go:cgo_import_dynamic runtime._QueryPerformanceFrequency QueryPerformanceFrequency%1 "kernel32.dll"
@@ -514,7 +786,7 @@ index 2c5d22ef..18cc3f31 100644
  //go:cgo_import_dynamic runtime._ResumeThread ResumeThread%1 "kernel32.dll"
  //go:cgo_import_dynamic runtime._RtlLookupFunctionEntry RtlLookupFunctionEntry%3 "kernel32.dll"
  //go:cgo_import_dynamic runtime._RtlVirtualUnwind  RtlVirtualUnwind%8 "kernel32.dll"
-@@ -64,8 +59,6 @@ const (
+@@ -65,8 +61,6 @@ const (
  //go:cgo_import_dynamic runtime._VirtualQuery VirtualQuery%3 "kernel32.dll"
  //go:cgo_import_dynamic runtime._WaitForSingleObject WaitForSingleObject%2 "kernel32.dll"
  //go:cgo_import_dynamic runtime._WaitForMultipleObjects WaitForMultipleObjects%4 "kernel32.dll"
@@ -523,10 +795,10 @@ index 2c5d22ef..18cc3f31 100644
  //go:cgo_import_dynamic runtime._WriteConsoleW WriteConsoleW%5 "kernel32.dll"
  //go:cgo_import_dynamic runtime._WriteFile WriteFile%5 "kernel32.dll"
  
-@@ -76,24 +69,20 @@ var (
+@@ -76,24 +70,21 @@ var (
+ 	// Following syscalls are available on every Windows PC.
  	// All these variables are set by the Windows executable
  	// loader before the Go program starts.
- 	_AddDllDirectory,
 -	_AddVectoredContinueHandler,
  	_AddVectoredExceptionHandler,
  	_CloseHandle,
@@ -545,10 +817,11 @@ index 2c5d22ef..18cc3f31 100644
  	_GetProcAddress,
  	_GetProcessAffinityMask,
 -	_GetQueuedCompletionStatusEx,
++	_GetQueuedCompletionStatus,
  	_GetStdHandle,
  	_GetSystemDirectoryA,
- 	_GetSystemInfo,
-@@ -104,7 +93,6 @@ var (
+ 	_GetSystemDirectoryW,
+@@ -105,7 +96,6 @@ var (
  	_PostQueuedCompletionStatus,
  	_QueryPerformanceCounter,
  	_QueryPerformanceFrequency,
@@ -556,7 +829,7 @@ index 2c5d22ef..18cc3f31 100644
  	_ResumeThread,
  	_RtlLookupFunctionEntry,
  	_RtlVirtualUnwind,
-@@ -123,10 +111,17 @@ var (
+@@ -124,12 +114,19 @@ var (
  	_VirtualQuery,
  	_WaitForSingleObject,
  	_WaitForMultipleObjects,
@@ -564,35 +837,48 @@ index 2c5d22ef..18cc3f31 100644
 -	_WerSetFlags,
  	_WriteConsoleW,
  	_WriteFile,
+ 	_ stdFunction
+ 
 +	// Loaded dynamically in loadOptionalSyscalls (missing on Windows XP).
 +	_AddVectoredContinueHandler,
 +	_CreateWaitableTimerExW,
 +	_GetErrorMode,
-+	_GetQueuedCompletionStatus,
 +	_GetQueuedCompletionStatusEx,
 +	_RaiseFailFastException,
 +	_WerGetFlags,
-+	_WerSetFlags,
- 	_ stdFunction
- 
- 	// Use RtlGenRandom to generate cryptographically random data.
-@@ -334,6 +329,15 @@ func loadOptionalSyscalls() {
++	_WerSetFlags stdFunction
++
+ 	// Use ProcessPrng to generate cryptographically random data, falling back to
+ 	// RtlGenRandom where ProcessPrng is unavailable. Only one is ever loaded.
+ 	//
+@@ -156,6 +153,7 @@ var (
+ var (
+ 	advapi32dll         = [...]uint16{'a', 'd', 'v', 'a', 'p', 'i', '3', '2', '.', 'd', 'l', 'l', 0}
+ 	bcryptprimitivesdll = [...]uint16{'b', 'c', 'r', 'y', 'p', 't', 'p', 'r', 'i', 'm', 'i', 't', 'i', 'v', 'e', 's', '.', 'd', 'l', 'l', 0}
++	kernel32dll         = [...]uint16{'k', 'e', 'r', 'n', 'e', 'l', '3', '2', '.', 'd', 'l', 'l', 0}
+ 	ntdlldll            = [...]uint16{'n', 't', 'd', 'l', 'l', '.', 'd', 'l', 'l', 0}
+ 	powrprofdll         = [...]uint16{'p', 'o', 'w', 'r', 'p', 'r', 'o', 'f', '.', 'd', 'l', 'l', 0}
+ 	winmmdll            = [...]uint16{'w', 'i', 'n', 'm', 'm', '.', 'd', 'l', 'l', 0}
+@@ -341,6 +339,18 @@ func loadOptionalSyscalls() {
  	}
  	_RtlGetCurrentPeb = windowsFindfunc(n32, []byte("RtlGetCurrentPeb\000"))
  	_RtlGetVersion = windowsFindfunc(n32, []byte("RtlGetVersion\000"))
 +
++	k32 := windowsLoadSystemLib(kernel32dll[:])
++	if k32 == 0 {
++		throw("kernel32.dll not found")
++	}
 +	_AddVectoredContinueHandler = windowsFindfunc(k32, []byte("AddVectoredContinueHandler\000"))
 +	_GetErrorMode = windowsFindfunc(k32, []byte("GetErrorMode\000"))
 +	_WerGetFlags = windowsFindfunc(k32, []byte("WerGetFlags\000"))
 +	_WerSetFlags = windowsFindfunc(k32, []byte("WerSetFlags\000"))
 +	_CreateWaitableTimerExW = windowsFindfunc(k32, []byte("CreateWaitableTimerExW\000"))
-+	_GetQueuedCompletionStatus = windowsFindfunc(k32, []byte("GetQueuedCompletionStatus\000"))
 +	_GetQueuedCompletionStatusEx = windowsFindfunc(k32, []byte("GetQueuedCompletionStatusEx\000"))
 +	_RaiseFailFastException = windowsFindfunc(k32, []byte("RaiseFailFastException\000"))
  }
  
- func monitorSuspendResume() {
-@@ -451,6 +455,9 @@ var haveHighResSleep = false
+ // loadRtlGenRandom returns RtlGenRandom from advapi32.dll, or nil if it
+@@ -466,6 +476,9 @@ var haveHighResSleep = false
  // resolution timer. createHighResTimer returns new timer
  // handle or 0, if CreateWaitableTimerEx failed.
  func createHighResTimer() uintptr {
@@ -602,8 +888,19 @@ index 2c5d22ef..18cc3f31 100644
  	// As per @jstarks, see
  	// https://github.com/golang/go/issues/8687#issuecomment-656259353
  	return stdcall(_CreateWaitableTimerExW, 0, 0,
+@@ -507,6 +520,10 @@ func initLongPathSupport() {
+ 		PebBitFieldOffset      = 3
+ 	)
+ 
++	if _RtlGetVersion == nil || _RtlGetCurrentPeb == nil {
++		return
++	}
++
+ 	// Check that we're ≥ 10.0.15063.
+ 	info := windows.OSVERSIONINFOW{}
+ 	info.OSVersionInfoSize = uint32(unsafe.Sizeof(info))
 diff --git a/src/runtime/signal_windows.go b/src/runtime/signal_windows.go
-index 40547b81..a2c5e22f 100644
+index 40547b81..08c26450 100644
 --- a/src/runtime/signal_windows.go
 +++ b/src/runtime/signal_windows.go
 @@ -11,9 +11,17 @@ import (
@@ -658,16 +955,16 @@ index 40547b81..a2c5e22f 100644
  		}
  	}
 +	if _RaiseFailFastException == nil {
-+		throw("runtime.dieFromException: unhandled exception (XP-compatible fallback)")
++		throw("runtime.dieFromException: unhandled exception")
 +	}
  	stdcall(_RaiseFailFastException, uintptr(unsafe.Pointer(info)), uintptr(unsafe.Pointer(r)), windows.FAIL_FAST_GENERATE_EXCEPTION_ADDRESS)
  }
  
 diff --git a/src/syscall/zsyscall_windows.go b/src/syscall/zsyscall_windows.go
-index 7d049c9e..f9a195b7 100644
+index a28c012d..b3bff268 100644
 --- a/src/syscall/zsyscall_windows.go
 +++ b/src/syscall/zsyscall_windows.go
-@@ -474,6 +474,9 @@ func CancelIo(s Handle) (err error) {
+@@ -472,6 +472,9 @@ func CancelIo(s Handle) (err error) {
  }
  
  func CancelIoEx(s Handle, o *Overlapped) (err error) {
@@ -677,7 +974,17 @@ index 7d049c9e..f9a195b7 100644
  	r1, _, e1 := SyscallN(procCancelIoEx.Addr(), uintptr(s), uintptr(unsafe.Pointer(o)))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -578,6 +581,9 @@ func DeleteFile(path *uint16) (err error) {
+@@ -551,6 +554,9 @@ func CreateProcess(appName *uint16, commandLine *uint16, procSecurity *SecurityA
+ }
+ 
+ func CreateSymbolicLink(symlinkfilename *uint16, targetfilename *uint16, flags uint32) (err error) {
++	if err := procCreateSymbolicLinkW.Find(); err != nil {
++		return err
++	}
+ 	r1, _, e1 := SyscallN(procCreateSymbolicLinkW.Addr(), uintptr(unsafe.Pointer(symlinkfilename)), uintptr(unsafe.Pointer(targetfilename)), uintptr(flags))
+ 	if r1&0xff == 0 {
+ 		err = errnoErr(e1)
+@@ -576,6 +582,9 @@ func DeleteFile(path *uint16) (err error) {
  }
  
  func deleteProcThreadAttributeList(attrlist *_PROC_THREAD_ATTRIBUTE_LIST) {
@@ -687,7 +994,17 @@ index 7d049c9e..f9a195b7 100644
  	SyscallN(procDeleteProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)))
  	return
  }
-@@ -917,6 +923,13 @@ func GetVersion() (ver uint32, err error) {
+@@ -782,6 +791,9 @@ func GetFileType(filehandle Handle) (n uint32, err error) {
+ }
+ 
+ func getFinalPathNameByHandle(file Handle, filePath *uint16, filePathSize uint32, flags uint32) (n uint32, err error) {
++	if err := procGetFinalPathNameByHandleW.Find(); err != nil {
++		return 0, EWINDOWS
++	}
+ 	r0, _, e1 := SyscallN(procGetFinalPathNameByHandleW.Addr(), uintptr(file), uintptr(unsafe.Pointer(filePath)), uintptr(filePathSize), uintptr(flags))
+ 	n = uint32(r0)
+ 	if n == 0 || n >= filePathSize {
+@@ -902,6 +914,13 @@ func rtlGetNtVersionNumbers(majorVersion *uint32, minorVersion *uint32, buildNum
  }
  
  func initializeProcThreadAttributeList(attrlist *_PROC_THREAD_ATTRIBUTE_LIST, attrcount uint32, flags uint32, size *uintptr) (err error) {
@@ -701,7 +1018,17 @@ index 7d049c9e..f9a195b7 100644
  	r1, _, e1 := SyscallN(procInitializeProcThreadAttributeList.Addr(), uintptr(unsafe.Pointer(attrlist)), uintptr(attrcount), uintptr(flags), uintptr(unsafe.Pointer(size)))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -1095,6 +1108,17 @@ func SetFileCompletionNotificationModes(handle Handle, flags uint8) (err error)
+@@ -1072,6 +1091,9 @@ func SetFileAttributes(name *uint16, attrs uint32) (err error) {
+ }
+ 
+ func SetFileCompletionNotificationModes(handle Handle, flags uint8) (err error) {
++	if err := procSetFileCompletionNotificationModes.Find(); err != nil {
++		return err
++	}
+ 	r1, _, e1 := SyscallN(procSetFileCompletionNotificationModes.Addr(), uintptr(handle), uintptr(flags))
+ 	if r1 == 0 {
+ 		err = errnoErr(e1)
+@@ -1080,6 +1102,17 @@ func SetFileCompletionNotificationModes(handle Handle, flags uint8) (err error)
  }
  
  func setFileInformationByHandle(handle Handle, fileInformationClass uint32, buf unsafe.Pointer, bufsize uint32) (err error) {
@@ -719,7 +1046,7 @@ index 7d049c9e..f9a195b7 100644
  	r1, _, e1 := SyscallN(procSetFileInformationByHandle.Addr(), uintptr(handle), uintptr(fileInformationClass), uintptr(buf), uintptr(bufsize))
  	if r1 == 0 {
  		err = errnoErr(e1)
-@@ -1144,6 +1168,9 @@ func UnmapViewOfFile(addr uintptr) (err error) {
+@@ -1129,6 +1162,9 @@ func UnmapViewOfFile(addr uintptr) (err error) {
  }
  
  func updateProcThreadAttribute(attrlist *_PROC_THREAD_ATTRIBUTE_LIST, flags uint32, attr uintptr, value unsafe.Pointer, size uintptr, prevvalue unsafe.Pointer, returnedsize *uintptr) (err error) {

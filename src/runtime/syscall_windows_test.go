@@ -5,10 +5,11 @@
 package runtime_test
 
 import (
+	"bytes"
 	"fmt"
 	"internal/abi"
 	"internal/race"
-	"internal/runtime/syscall/windows"
+	"internal/syscall/windows"
 	"internal/syscall/windows/sysdll"
 	"internal/testenv"
 	"io"
@@ -44,6 +45,34 @@ func (d *DLL) Proc(name string) *syscall.Proc {
 		d.t.Fatal(e)
 	}
 	return p
+}
+
+// TestLoadSystemLib checks that the runtime can load a system DLL both
+// with LOAD_LIBRARY_SEARCH_SYSTEM32 and by absolute path in the system
+// directory.
+func TestLoadSystemLib(t *testing.T) {
+	name, err := syscall.UTF16FromString("winmm.dll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := runtime.LoadSystemLib(name); h == 0 {
+		t.Errorf("LoadSystemLib(winmm.dll) = 0, want non-zero")
+	}
+	if h := runtime.LoadSystemLibFromSysDir(name); h == 0 {
+		t.Errorf("LoadSystemLibFromSysDir(winmm.dll) = 0, want non-zero")
+	}
+}
+
+// TestReadRandomFromRtlGenRandom checks the generator readRandom falls back
+// to when ProcessPrng is missing.
+func TestReadRandomFromRtlGenRandom(t *testing.T) {
+	b := make([]byte, 32)
+	if n := runtime.ReadRandomFromRtlGenRandom(b); n != len(b) {
+		t.Fatalf("ReadRandomFromRtlGenRandom = %d, want %d", n, len(b))
+	}
+	if bytes.Equal(b, make([]byte, len(b))) {
+		t.Error("RtlGenRandom left the buffer zeroed")
+	}
 }
 
 func TestStdCall(t *testing.T) {
@@ -773,12 +802,13 @@ func TestSyscallN(t *testing.T) {
 	if _, err := exec.LookPath("gcc"); err != nil {
 		t.Skip("skipping test: gcc is missing")
 	}
-	if runtime.GOARCH != "amd64" {
-		t.Skipf("skipping test: GOARCH=%s", runtime.GOARCH)
+
+	var nargs = 64
+	if testing.Short() {
+		nargs = 16
 	}
 
-	for arglen := 0; arglen <= windows.MaxArgs; arglen++ {
-		arglen := arglen
+	for arglen := range nargs {
 		t.Run(fmt.Sprintf("arg-%d", arglen), func(t *testing.T) {
 			t.Parallel()
 			args := make([]string, arglen)
@@ -1225,6 +1255,31 @@ var (
 	procCreateEvent = modkernel32.NewProc("CreateEventW")
 	procSetEvent    = modkernel32.NewProc("SetEvent")
 )
+
+func TestTrueVersion(t *testing.T) {
+	ver, err := syscall.GetVersion()
+	if err != nil {
+		t.Fatalf("GetVersion failed: %v", err)
+	}
+	wantMajor, wantMinor, wantBuild := windows.Version()
+	major := uint32(byte(ver))
+	minor := uint32(uint8(ver >> 8))
+	build := uint32(uint16(ver >> 16))
+	// Binaries built by this fork declare a 6.1 subsystem version, and Windows
+	// shims GetVersion for any image whose subsystem version is older than 6.3.
+	// RtlGetVersion, which the standard library uses, is never shimmed, so above
+	// Windows 8 only check that GetVersion does not claim to be newer than the
+	// truth.
+	if wantMajor > 6 || (wantMajor == 6 && wantMinor > 2) {
+		if major > wantMajor || (major == wantMajor && minor > wantMinor) {
+			t.Errorf("GetVersion = %d.%d (Build %d), newer than the true %d.%d (Build %d)", major, minor, build, wantMajor, wantMinor, wantBuild)
+		}
+		return
+	}
+	if major != wantMajor || minor != wantMinor || build != wantBuild {
+		t.Errorf("GetVersion = %d.%d (Build %d), want %d.%d (Build %d)", major, minor, build, wantMajor, wantMinor, wantBuild)
+	}
+}
 
 func createEvent() (syscall.Handle, error) {
 	r0, _, e0 := syscall.Syscall6(procCreateEvent.Addr(), 4, 0, 0, 0, 0, 0, 0)

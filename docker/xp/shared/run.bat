@@ -11,10 +11,36 @@ if not exist "%SHARE%" goto done
 
 echo starting > "%SHARE%\result.txt"
 
+if exist "%SHARE%\reticulum-go-winxp.exe" (
+  "%SHARE%\reticulum-go-winxp.exe" --version > "%SHARE%\reticulum.out" 2>&1
+  set EXITCODE=!ERRORLEVEL!
+  if !EXITCODE! neq 0 (
+    echo reticulum-go --version failed > "%SHARE%\smoke.out"
+    type "%SHARE%\reticulum.out" >> "%SHARE%\smoke.out"
+    echo !EXITCODE! > "%SHARE%\smoke.exit"
+    goto write_fail
+  )
+  findstr /C:"reticulum-go" "%SHARE%\reticulum.out" >nul
+  if errorlevel 1 (
+    echo reticulum-go version output missing marker > "%SHARE%\smoke.out"
+    type "%SHARE%\reticulum.out" >> "%SHARE%\smoke.out"
+    set EXITCODE=1
+    echo 1 > "%SHARE%\smoke.exit"
+    goto write_fail
+  )
+)
+
 if exist "%SHARE%\xp-smoke-386.exe" (
-  "%SHARE%\xp-smoke-386.exe" > "%SHARE%\smoke.out" 2>&1
+  "%SHARE%\xp-smoke-386.exe" > "%SHARE%\smoke.tmp" 2>&1
   set EXITCODE=!ERRORLEVEL!
   echo !EXITCODE! > "%SHARE%\smoke.exit"
+  if exist "%SHARE%\reticulum.out" (
+    echo reticulum-go --version ok > "%SHARE%\smoke.out"
+    type "%SHARE%\reticulum.out" >> "%SHARE%\smoke.out"
+  ) else (
+    echo. > "%SHARE%\smoke.out"
+  )
+  type "%SHARE%\smoke.tmp" >> "%SHARE%\smoke.out"
   if !EXITCODE! neq 0 goto write_fail
   set STATUS=PASS
   echo PASS > "%SHARE%\result.txt"

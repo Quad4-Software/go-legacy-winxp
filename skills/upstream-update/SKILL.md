@@ -10,7 +10,7 @@ description: >-
 
 ## Goal
 
-Move this tree to a newer [go-legacy-win7](https://github.com/thongtech/go-legacy-win7) tag (example `v1.27.0-2`) **without losing XP patches**.
+Move this tree to a newer [go-legacy-win7](https://github.com/thongtech/go-legacy-win7) tag (example `v1.27.1-1`) **without losing XP patches**.
 
 ## Preconditions
 
@@ -33,7 +33,7 @@ git remote -v
 Do **not** `git merge` stock golang/go into this repo.
 
 ```bash
-./scripts/scaffold-version.sh v1.27.0-2
+./scripts/scaffold-version.sh v1.27.1-1
 ```
 
 Flags:

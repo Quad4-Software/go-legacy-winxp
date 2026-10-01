@@ -37,14 +37,15 @@ func errnoErr(e syscall.Errno) error {
 }
 
 var (
-	modadvapi32 = syscall.NewLazyDLL(sysdll.Add("advapi32.dll"))
-	modiphlpapi = syscall.NewLazyDLL(sysdll.Add("iphlpapi.dll"))
-	modkernel32 = syscall.NewLazyDLL(sysdll.Add("kernel32.dll"))
-	modnetapi32 = syscall.NewLazyDLL(sysdll.Add("netapi32.dll"))
-	modntdll    = syscall.NewLazyDLL(sysdll.Add("ntdll.dll"))
-	modpsapi    = syscall.NewLazyDLL(sysdll.Add("psapi.dll"))
-	moduserenv  = syscall.NewLazyDLL(sysdll.Add("userenv.dll"))
-	modws2_32   = syscall.NewLazyDLL(sysdll.Add("ws2_32.dll"))
+	modadvapi32         = syscall.NewLazyDLL(sysdll.Add("advapi32.dll"))
+	modbcryptprimitives = syscall.NewLazyDLL(sysdll.Add("bcryptprimitives.dll"))
+	modiphlpapi         = syscall.NewLazyDLL(sysdll.Add("iphlpapi.dll"))
+	modkernel32         = syscall.NewLazyDLL(sysdll.Add("kernel32.dll"))
+	modnetapi32         = syscall.NewLazyDLL(sysdll.Add("netapi32.dll"))
+	modntdll            = syscall.NewLazyDLL(sysdll.Add("ntdll.dll"))
+	modpsapi            = syscall.NewLazyDLL(sysdll.Add("psapi.dll"))
+	moduserenv          = syscall.NewLazyDLL(sysdll.Add("userenv.dll"))
+	modws2_32           = syscall.NewLazyDLL(sysdll.Add("ws2_32.dll"))
 
 	procAdjustTokenPrivileges             = modadvapi32.NewProc("AdjustTokenPrivileges")
 	procDuplicateTokenEx                  = modadvapi32.NewProc("DuplicateTokenEx")
@@ -65,6 +66,7 @@ var (
 	procSetNamedSecurityInfoW             = modadvapi32.NewProc("SetNamedSecurityInfoW")
 	procSetTokenInformation               = modadvapi32.NewProc("SetTokenInformation")
 	procSystemFunction036                 = modadvapi32.NewProc("SystemFunction036")
+	procProcessPrng                       = modbcryptprimitives.NewProc("ProcessPrng")
 	procGetAdaptersAddresses              = modiphlpapi.NewProc("GetAdaptersAddresses")
 	procCreateEventW                      = modkernel32.NewProc("CreateEventW")
 	procCreateIoCompletionPort            = modkernel32.NewProc("CreateIoCompletionPort")
@@ -82,6 +84,7 @@ var (
 	procGetTempPath2W                     = modkernel32.NewProc("GetTempPath2W")
 	procGetVolumeInformationByHandleW     = modkernel32.NewProc("GetVolumeInformationByHandleW")
 	procGetVolumeNameForVolumeMountPointW = modkernel32.NewProc("GetVolumeNameForVolumeMountPointW")
+	procIsProcessorFeaturePresent         = modkernel32.NewProc("IsProcessorFeaturePresent")
 	procLockFileEx                        = modkernel32.NewProc("LockFileEx")
 	procModule32FirstW                    = modkernel32.NewProc("Module32FirstW")
 	procModule32NextW                     = modkernel32.NewProc("Module32NextW")
@@ -90,9 +93,11 @@ var (
 	procReOpenFile                        = modkernel32.NewProc("ReOpenFile")
 	procRtlLookupFunctionEntry            = modkernel32.NewProc("RtlLookupFunctionEntry")
 	procRtlVirtualUnwind                  = modkernel32.NewProc("RtlVirtualUnwind")
+	procSetEvent                          = modkernel32.NewProc("SetEvent")
 	procSetFileInformationByHandle        = modkernel32.NewProc("SetFileInformationByHandle")
 	procUnlockFileEx                      = modkernel32.NewProc("UnlockFileEx")
 	procVirtualQuery                      = modkernel32.NewProc("VirtualQuery")
+	procWaitForMultipleObjects            = modkernel32.NewProc("WaitForMultipleObjects")
 	procNetShareAdd                       = modnetapi32.NewProc("NetShareAdd")
 	procNetShareDel                       = modnetapi32.NewProc("NetShareDel")
 	procNetUserAdd                        = modnetapi32.NewProc("NetUserAdd")
@@ -100,6 +105,7 @@ var (
 	procNetUserGetLocalGroups             = modnetapi32.NewProc("NetUserGetLocalGroups")
 	procNtCreateFile                      = modntdll.NewProc("NtCreateFile")
 	procNtOpenFile                        = modntdll.NewProc("NtOpenFile")
+	procNtQueryDirectoryFile              = modntdll.NewProc("NtQueryDirectoryFile")
 	procNtQueryInformationFile            = modntdll.NewProc("NtQueryInformationFile")
 	procNtSetInformationFile              = modntdll.NewProc("NtSetInformationFile")
 	procRtlGetVersion                     = modntdll.NewProc("RtlGetVersion")
@@ -270,6 +276,18 @@ func SetTokenInformation(tokenHandle syscall.Token, tokenInformationClass uint32
 	return
 }
 
+func ProcessPrng(buf []byte) (err error) {
+	var _p0 *byte
+	if len(buf) > 0 {
+		_p0 = &buf[0]
+	}
+	r1, _, e1 := syscall.SyscallN(procProcessPrng.Addr(), uintptr(unsafe.Pointer(_p0)), uintptr(len(buf)))
+	if r1 == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
 func RtlGenRandom(buf []byte) (err error) {
 	var _p0 *byte
 	if len(buf) > 0 {
@@ -348,13 +366,59 @@ func GetCurrentThread() (pseudoHandle syscall.Handle, err error) {
 
 func GetFileInformationByHandleEx(handle syscall.Handle, class uint32, info *byte, bufsize uint32) (err error) {
 	if err := procGetFileInformationByHandleEx.Find(); err != nil {
-		return ERROR_NOT_SUPPORTED
+		return getFileInformationByHandleExFallback(handle, class, info, bufsize)
 	}
 	r1, _, e1 := syscall.SyscallN(procGetFileInformationByHandleEx.Addr(), uintptr(handle), uintptr(class), uintptr(unsafe.Pointer(info)), uintptr(bufsize))
 	if r1 == 0 {
 		err = errnoErr(e1)
 	}
 	return
+}
+
+func NtQueryDirectoryFile(handle syscall.Handle, event syscall.Handle, apcRoutine uintptr, apcContext uintptr, iosb *IO_STATUS_BLOCK, buf unsafe.Pointer, length uint32, class uint32, singleEntry uint32, fileName unsafe.Pointer, restart uint32) (ntstatus error) {
+	r0, _, _ := syscall.SyscallN(procNtQueryDirectoryFile.Addr(), uintptr(handle), uintptr(event), apcRoutine, apcContext, uintptr(unsafe.Pointer(iosb)), uintptr(buf), uintptr(length), uintptr(class), uintptr(singleEntry), uintptr(fileName), uintptr(restart))
+	if r0 != 0 {
+		ntstatus = NTStatus(r0)
+	}
+	return
+}
+
+func getFileInformationByHandleExFallback(handle syscall.Handle, class uint32, info *byte, bufsize uint32) error {
+	var ntClass uint32
+	restart := uint32(0)
+	switch class {
+	case FileFullDirectoryInfo:
+		ntClass = fileFullDirectoryInformation
+	case FileFullDirectoryRestartInfo:
+		ntClass = fileFullDirectoryInformation
+		restart = 1
+	case FileIdBothDirectoryInfo:
+		ntClass = fileIdBothDirectoryInformation
+	case FileIdBothDirectoryRestartInfo:
+		ntClass = fileIdBothDirectoryInformation
+		restart = 1
+	default:
+		return syscall.EWINDOWS
+	}
+	var iosb IO_STATUS_BLOCK
+	err := NtQueryDirectoryFile(handle, 0, 0, 0, &iosb, unsafe.Pointer(info), bufsize, ntClass, 0, nil, restart)
+	if err == nil {
+		return nil
+	}
+	st, ok := err.(NTStatus)
+	if !ok {
+		return err
+	}
+	switch st {
+	case STATUS_NO_MORE_FILES:
+		return syscall.ERROR_NO_MORE_FILES
+	case STATUS_NO_SUCH_FILE:
+		return syscall.ERROR_FILE_NOT_FOUND
+	case STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER, STATUS_NOT_SUPPORTED:
+		return ERROR_INVALID_PARAMETER
+	default:
+		return st.Errno()
+	}
 }
 
 func GetFileSizeEx(handle syscall.Handle, size *int64) (err error) {
@@ -438,6 +502,12 @@ func GetVolumeNameForVolumeMountPoint(volumeMountPoint *uint16, volumeName *uint
 	return
 }
 
+func IsProcessorFeaturePresent(ProcessorFeature uint32) (ret bool) {
+	r0, _, _ := syscall.SyscallN(procIsProcessorFeaturePresent.Addr(), uintptr(ProcessorFeature))
+	ret = r0 != 0
+	return
+}
+
 func LockFileEx(file syscall.Handle, flags uint32, reserved uint32, bytesLow uint32, bytesHigh uint32, overlapped *syscall.Overlapped) (err error) {
 	r1, _, e1 := syscall.SyscallN(procLockFileEx.Addr(), uintptr(file), uintptr(flags), uintptr(reserved), uintptr(bytesLow), uintptr(bytesHigh), uintptr(unsafe.Pointer(overlapped)))
 	if r1 == 0 {
@@ -481,7 +551,7 @@ func MultiByteToWideChar(codePage uint32, dwFlags uint32, str *byte, nstr int32,
 
 func ReOpenFile(filehandle syscall.Handle, desiredAccess uint32, shareMode uint32, flagAndAttributes uint32) (handle syscall.Handle, err error) {
 	if err := procReOpenFile.Find(); err != nil {
-		return syscall.InvalidHandle, ERROR_NOT_SUPPORTED
+		return syscall.InvalidHandle, syscall.EWINDOWS
 	}
 	r0, _, e1 := syscall.SyscallN(procReOpenFile.Addr(), uintptr(filehandle), uintptr(desiredAccess), uintptr(shareMode), uintptr(flagAndAttributes))
 	handle = syscall.Handle(r0)
@@ -500,6 +570,14 @@ func RtlLookupFunctionEntry(pc uintptr, baseAddress *uintptr, table unsafe.Point
 func RtlVirtualUnwind(handlerType uint32, baseAddress uintptr, pc uintptr, entry *RUNTIME_FUNCTION, ctxt unsafe.Pointer, data unsafe.Pointer, frame *uintptr, ctxptrs unsafe.Pointer) (ret uintptr) {
 	r0, _, _ := syscall.SyscallN(procRtlVirtualUnwind.Addr(), uintptr(handlerType), uintptr(baseAddress), uintptr(pc), uintptr(unsafe.Pointer(entry)), uintptr(ctxt), uintptr(data), uintptr(unsafe.Pointer(frame)), uintptr(ctxptrs))
 	ret = uintptr(r0)
+	return
+}
+
+func SetEvent(event syscall.Handle) (err error) {
+	r1, _, e1 := syscall.SyscallN(procSetEvent.Addr(), uintptr(event))
+	if r1 == 0 {
+		err = errnoErr(e1)
+	}
 	return
 }
 
@@ -583,6 +661,19 @@ func UnlockFileEx(file syscall.Handle, reserved uint32, bytesLow uint32, bytesHi
 func VirtualQuery(address uintptr, buffer *MemoryBasicInformation, length uintptr) (err error) {
 	r1, _, e1 := syscall.SyscallN(procVirtualQuery.Addr(), uintptr(address), uintptr(unsafe.Pointer(buffer)), uintptr(length))
 	if r1 == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func WaitForMultipleObjects(count uint32, handles *syscall.Handle, waitAll bool, waitMilliseconds uint32) (event uint32, err error) {
+	var _p0 uint32
+	if waitAll {
+		_p0 = 1
+	}
+	r0, _, e1 := syscall.SyscallN(procWaitForMultipleObjects.Addr(), uintptr(count), uintptr(unsafe.Pointer(handles)), uintptr(_p0), uintptr(waitMilliseconds))
+	event = uint32(r0)
+	if event == 0xffffffff {
 		err = errnoErr(e1)
 	}
 	return

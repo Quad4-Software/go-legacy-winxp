@@ -1,0 +1,5 @@
+FROM dockurr/windows:6.04
+# Nested KVM and TCG are both slower than bare metal. dockurr kills QEMU
+# after 30s if it has not printed a boot marker, which is too short for
+# Windows XP setup.
+RUN sed -i 's/waitForBoot "$pid" 30/waitForBoot "$pid" 1800/' /run/entry.sh

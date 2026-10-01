@@ -470,7 +470,7 @@ func dieFromException(info *windows.ExceptionRecord, r *windows.Context) {
 		}
 	}
 	if _RaiseFailFastException == nil {
-		throw("runtime.dieFromException: unhandled exception (XP-compatible fallback)")
+		throw("runtime.dieFromException: unhandled exception")
 	}
 	stdcall(_RaiseFailFastException, uintptr(unsafe.Pointer(info)), uintptr(unsafe.Pointer(r)), windows.FAIL_FAST_GENERATE_EXCEPTION_ADDRESS)
 }
