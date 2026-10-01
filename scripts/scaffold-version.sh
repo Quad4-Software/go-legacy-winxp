@@ -176,8 +176,12 @@ sanity_checks() {
     echo "fork branding missing from README.md" >&2
     exit 1
   fi
-  if ! grep -q 'branch=master' "$ROOT/.github/workflows/go-build.yml"; then
-    echo "go-build.yml missing master fallback" >&2
+  if ! grep -q 'package-toolchain.sh' "$ROOT/.github/workflows/go-build.yml"; then
+    echo "go-build.yml missing package-toolchain.sh" >&2
+    exit 1
+  fi
+  if ! grep -q 'GITHUB_SHA' "$ROOT/.github/workflows/go-build.yml"; then
+    echo "go-build.yml must build the dispatch commit" >&2
     exit 1
   fi
   if ! diff -q "$win7/src/runtime/os_windows.go" "$ROOT/src/runtime/os_windows.go" >/dev/null 2>&1; then

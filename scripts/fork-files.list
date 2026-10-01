@@ -2,9 +2,11 @@
 # Directories end with /. Comments and blank lines ignored.
 README.md
 AGENTS.md
+.github/workflows/ci.yml
 .github/workflows/go-build.yml
 .github/workflows/xp-test.yml
 .github/workflows/watch-upstream.yml
+.github/dependabot.yml
 patches/0010-Add-Windows-XP-support.patch
 .gitignore
 scripts/

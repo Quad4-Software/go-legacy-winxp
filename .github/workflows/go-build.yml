@@ -4,21 +4,80 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. 1.23.4-2)"
-        required: true
+        description: "Release version without v prefix (empty uses VERSION, e.g. 1.27.1)"
+        required: false
         type: string
-
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  host:
+    name: Build host toolchain
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
 
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve version
+        id: meta
+        run: |
+          set -euo pipefail
+          input="${{ inputs.version }}"
+          if [[ -n "$input" ]]; then
+            ver="$input"
+          else
+            ver="$(head -n1 VERSION | tr -d '[:space:]')"
+            ver="${ver#go}"
+          fi
+          ver="${ver#v}"
+          if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "refusing version $ver" >&2
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Release version $ver from commit ${GITHUB_SHA}"
+
+      - name: Set up bootstrap Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.24.6"
+          cache: false
+
+      - name: Build host toolchain
+        working-directory: src
+        env:
+          CGO_ENABLED: "0"
+        run: ./make.bash
+
+      - name: Archive host tree
+        run: |
+          tar --exclude .git -czf "${{ runner.temp }}/host-toolchain.tar.gz" .
+          ls -lh "${{ runner.temp }}/host-toolchain.tar.gz"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: host-toolchain
+          path: ${{ runner.temp }}/host-toolchain.tar.gz
+          retention-days: 1
+
+  dist:
+    name: Package ${{ matrix.target }}
+    needs: host
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
+      fail-fast: false
       matrix:
         target:
           - windows_amd64
@@ -30,138 +89,91 @@ jobs:
           - linux_arm64
           - linux_arm
           - linux_386
-        variant: [standard]
-
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
-      - name: Resolve source branch
-        id: branch
-        run: |
-          VERSION="${{ inputs.version }}"
-          MAJOR_MINOR=$(echo "$VERSION" | grep -oP '^\d+\.\d+')
 
-          BRANCHES=$(git ls-remote --heads https://github.com/${{ github.repository }} | awk '{print $2}' | sed 's|refs/heads/||')
-
-          RELEASE_BRANCH="release-branch.go${MAJOR_MINOR}"
-
-          if echo "$BRANCHES" | grep -qx "$RELEASE_BRANCH"; then
-            echo "branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
-            echo "Checking out $RELEASE_BRANCH for version $VERSION"
-          else
-            echo "branch=master" >> $GITHUB_OUTPUT
-            echo "No release branch found for $MAJOR_MINOR, falling back to master"
-          fi
-
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          persist-credentials: false
-          path: go-legacy-winxp
-          ref: ${{ steps.branch.outputs.branch }}
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          name: host-toolchain
+          path: ${{ runner.temp }}
 
-      - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: "go-legacy-winxp/src/go.mod"
-          cache: false
+      - name: Unpack host tree
+        run: tar -xzf "${{ runner.temp }}/host-toolchain.tar.gz"
 
-      - name: Set execute permissions
-        run: |
-          chmod +x go-legacy-winxp/src/make.bash
-
-      - name: Build Go toolchain
+      - name: Cross-compile target
         env:
-          GOOS: ${{ startsWith(matrix.target, 'windows_') && 'windows' || startsWith(matrix.target, 'darwin_') && 'darwin' || 'linux' }}
-          GOARCH: ${{ endsWith(matrix.target, '_386') && '386' || endsWith(matrix.target, '_amd64') && 'amd64' || endsWith(matrix.target, '_arm64') && 'arm64' || 'arm' }}
-          CGO_ENABLED: 0
+          CGO_ENABLED: "0"
         run: |
-          cd go-legacy-winxp/src
-          ./make.bash
-
-      - name: Create release directory
-        run: |
-          mkdir -p release
-          cp -r go-legacy-winxp release/
-          cd release/go-legacy-winxp
-
-          # Remove development files
-          rm -rf .git*
-          rm -rf codereview.cfg
-          rm -rf patches
-          rm -rf test
-          rm -rf src/**/*_test.go
-          rm -rf src/**/testdata
-          rm -rf doc
-          rm -rf misc
-          rm -rf src/*.bash
-          rm -rf src/*.bat
-          rm -rf src/*.rc
-          rm -rf src/make.*
-          rm -rf src/run.*
-          rm -rf *.md
-
-          # Process binaries
-          cd bin
-          if [ "${{ matrix.target }}" != "linux_amd64" ]; then
-            rm -f go gofmt
+          set -euo pipefail
+          export GOROOT="$PWD"
+          export PATH="$GOROOT/bin:$PATH"
+          go version
+          target="${{ matrix.target }}"
+          goos="${target%%_*}"
+          goarch="${target#*_}"
+          if [[ "$target" != "linux_amd64" ]]; then
+            GOOS="$goos" GOARCH="$goarch" go install std cmd
           fi
-          if [ -d "${{ matrix.target }}" ]; then
-            mv ${{ matrix.target }}/* ./
-          fi
-          rm -rf */
-
-          # Clean up pkg folder
-          cd ../pkg
-          find . -mindepth 1 -maxdepth 1 -type d ! \( -name "include" -o -name "tool" \) -exec rm -rf {} +
-
-          # Clean up pkg/tool folder
-          cd tool
-          find . -mindepth 1 -maxdepth 1 -type d ! -name "${{ matrix.target }}" -exec rm -rf {} +
-
-      - name: Set version suffix
-        id: version
-        run: |
-          if [ "${{ matrix.variant }}" == "race" ]; then
-            echo "suffix=-race" >> $GITHUB_OUTPUT
-          else
-            echo "suffix=" >> $GITHUB_OUTPUT
-          fi
+          ls -l bin bin/"$target" 2>/dev/null || true
 
       - name: Package
         run: |
-          cd release
-          if [[ "${{ matrix.target }}" == windows_* ]]; then
-            zip -r ../go-legacy-winxp-${{ inputs.version }}${{ steps.version.outputs.suffix }}.${{ matrix.target }}.zip .
-          else
-            tar -czf ../go-legacy-winxp-${{ inputs.version }}${{ steps.version.outputs.suffix }}.${{ matrix.target }}.tar.gz .
-          fi
+          chmod +x scripts/package-toolchain.sh
+          mkdir -p dist
+          ./scripts/package-toolchain.sh "${{ matrix.target }}" "${{ needs.host.outputs.version }}" "$PWD/dist"
+          ls -lh dist
 
-      - name: Create Release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create draft release
+    needs: [host, dist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish draft
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.host.outputs.version }}
         run: |
-          cd go-legacy-winxp
-
-          git config --global user.email "actions@github.com"
-          git config --global user.name "GitHub Actions"
-
-          git fetch --tags
-          if ! git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
-            git tag -a "v${{ inputs.version }}" -m "go-legacy-winxp-${{ inputs.version }}"
-            git push origin "v${{ inputs.version }}"
+          set -euo pipefail
+          ls -lh dist
+          tag="v${VERSION}"
+          if ! git rev-parse "$tag" >/dev/null 2>&1; then
+            git tag -a "$tag" -m "go-legacy-winxp-${VERSION}"
+            git push origin "$tag"
           fi
-
-          gh release view v${{ inputs.version }} || \
-          gh release create v${{ inputs.version }} \
-            --title "go-legacy-winxp-${{ inputs.version }}" \
-            --notes "go-legacy-winxp-${{ inputs.version }}" \
-            --draft \
-            --target ${{ steps.branch.outputs.branch }}   # <-- dynamic branch
-
-          gh release upload v${{ inputs.version }} \
-            ../go-legacy-winxp-${{ inputs.version }}${{ steps.version.outputs.suffix }}.${{ matrix.target }}.* \
-            --clobber
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "go-legacy-winxp-${VERSION}" \
+              --notes "go-legacy-winxp ${VERSION} (commit ${GITHUB_SHA})." \
+              --draft \
+              --target "${GITHUB_SHA}"
+          fi
+          gh release upload "$tag" dist/* --clobber

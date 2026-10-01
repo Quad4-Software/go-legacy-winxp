@@ -2,6 +2,10 @@
 
 **go-legacy-winxp** is a fork of [go-legacy-win7](https://github.com/thongtech/go-legacy-win7) that extends legacy Windows support down to Windows XP and Server 2003, while keeping Windows 7 through Windows 11 compatibility and the restored deprecated `go get` behaviour from the win7 fork.
 
+## Maintenance
+
+LLMs are used to maintain and verify this repository: Cursor (Grok 4.6 / Grok 4.7). Changes are also verified by a human.
+
 ![Gopher image](https://golang.org/doc/gopher/fiveyears.jpg)
 _Gopher image by [Renee French][rf], licensed under [Creative Commons 4.0 Attribution licence][cc4-by]._
 
@@ -117,6 +121,14 @@ docker build -f docker/build/Dockerfile -t go-legacy-winxp .
 ```
 
 The image `go` binary is at `/usr/local/go-legacy-winxp/bin/go`.
+
+### Continuous integration
+
+The `CI` workflow builds this toolchain with a Go 1.24.6 bootstrap and runs `scripts/check-xp-pe.sh` on every pull request and on `master`. That is the check that must pass on GitHub-hosted runners.
+
+`XP Compatibility Test` only runs the live `dockurr/windows` guest when `/dev/kvm` is present (self-hosted). GitHub-hosted runners skip that job instead of failing. Run it locally with `./scripts/test-xp-docker.sh`.
+
+Draft binary releases are produced by `Go Build Release` (`workflow_dispatch`). The workflow builds a host toolchain from the dispatch commit, cross-compiles each `GOOS/GOARCH` target, and uploads archives to a draft GitHub release.
 
 ### Windows XP guest smoke test (Docker)
 

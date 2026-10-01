@@ -82,7 +82,7 @@ Sanity:
 
 ```bash
 diff -u /tmp/go-legacy-win7/src/runtime/os_windows.go src/runtime/os_windows.go | head
-grep -n 'go-legacy-winxp\|branch=master' README.md .github/workflows/go-build.yml
+grep -n 'go-legacy-winxp\|GITHUB_SHA\|package-toolchain.sh' README.md .github/workflows/go-build.yml
 ```
 
 ## Notes
@@ -100,5 +100,5 @@ grep -n 'go-legacy-winxp\|branch=master' README.md .github/workflows/go-build.ym
 | PE target is 6.1 again | XP restore missed `pe.go` check `xp-files.list` |
 | Forbidden Vista+ static imports | XP restore missed runtime/zsyscall dynamic load |
 | README says go-legacy-win7 | Fork identity not restored check `fork-files.list` |
-| Workflow falls back to `main` | Restored wrong `go-build.yml` |
+| Workflow builds `main` or a guessed branch | Restored wrong `go-build.yml` (must use `GITHUB_SHA`) |
 | Dirty tree refused | Stash/commit or pass `--force` |
