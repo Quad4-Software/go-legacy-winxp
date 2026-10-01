@@ -1,79 +1,84 @@
 name: XP Compatibility Test
 
+# Live QEMU/XP is slow and needs KVM. GitHub-hosted pull requests must not
+# queue it. PE checks live in the CI workflow. Dispatch this on a host with
+# /dev/kvm, or run ./scripts/test-xp-docker.sh locally.
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "docker/xp/**"
-      - "scripts/fetch-xp-iso.sh"
-      - "scripts/test-xp-docker.sh"
-      - ".github/workflows/xp-test.yml"
-  pull_request:
-    paths:
-      - "docker/xp/**"
-      - "scripts/fetch-xp-iso.sh"
-      - "scripts/test-xp-docker.sh"
-      - ".github/workflows/xp-test.yml"
+    inputs:
+      force_tcg:
+        description: "Run with TCG when /dev/kvm is missing (very slow)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: xp-guest
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  xp-docker:
+  live-guest:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
+      - name: Probe KVM
+        id: kvm
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            echo "mode=kvm" >> "$GITHUB_OUTPUT"
+            ls -l /dev/kvm
+          elif [[ "${{ inputs.force_tcg }}" == "true" ]]; then
+            echo "mode=tcg" >> "$GITHUB_OUTPUT"
+            echo "KVM missing, continuing with TCG because force_tcg was set"
+          else
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
+            echo "No /dev/kvm. Not starting QEMU."
+            echo "Use the CI workflow for PE checks, or dispatch this on a KVM host."
+          fi
+
       - name: Harden runner
+        if: steps.kvm.outputs.mode != 'skip'
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
 
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: steps.kvm.outputs.mode != 'skip'
         with:
           persist-credentials: false
 
-      - name: Check KVM
-        id: kvm
-        run: |
-          if [[ -e /dev/kvm ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            ls -l /dev/kvm
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "No /dev/kvm on this runner. Skipping live XP Docker test."
-            echo "PE checks run in the CI workflow. Live guest: ./scripts/test-xp-docker.sh"
-          fi
-
       - name: Set up bootstrap Go
-        if: steps.kvm.outputs.available == 'true'
+        if: steps.kvm.outputs.mode != 'skip'
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: "1.24.6"
           cache: false
 
       - name: Build toolchain
-        if: steps.kvm.outputs.available == 'true'
+        if: steps.kvm.outputs.mode != 'skip'
         working-directory: src
         env:
           CGO_ENABLED: "0"
         run: ./make.bash
 
       - name: Cache XP ISO
-        if: steps.kvm.outputs.available == 'true'
+        if: steps.kvm.outputs.mode != 'skip'
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: docker/xp/iso/xp-sp3.iso
           key: xp-iso-sp3-v1
 
       - name: Cache XP disk image
-        if: steps.kvm.outputs.available == 'true'
+        if: steps.kvm.outputs.mode != 'skip'
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: docker/xp/storage
           key: xp-disk-${{ runner.os }}-dockur-6.04-v3
 
       - name: Validate XP storage cache
-        if: steps.kvm.outputs.available == 'true'
+        if: steps.kvm.outputs.mode != 'skip'
         run: |
           storage="docker/xp/storage"
           if [[ -L "$storage" ]]; then
@@ -87,13 +92,14 @@ jobs:
           fi
 
       - name: Run XP Docker smoke test
-        if: steps.kvm.outputs.available == 'true'
+        if: steps.kvm.outputs.mode != 'skip'
         env:
           XP_TEST_TIMEOUT: "7200"
+          XP_KVM: ${{ steps.kvm.outputs.mode == 'kvm' && 'Y' || 'N' }}
         run: ./scripts/test-xp-docker.sh
 
       - name: Upload XP smoke artifacts
-        if: failure() && steps.kvm.outputs.available == 'true'
+        if: failure() && steps.kvm.outputs.mode != 'skip'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: xp-smoke-artifacts

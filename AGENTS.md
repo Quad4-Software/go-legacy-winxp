@@ -148,7 +148,7 @@ Expect PE OS and subsystem **5.1** for XP-compatible binaries.
 
 `.github/workflows/go-build.yml` is `workflow_dispatch` with an optional version input (defaults to `VERSION`). It builds a host toolchain from the dispatch commit, cross-compiles each target, and publishes a draft GitHub release for that commit.
 
-`.github/workflows/xp-test.yml` runs the live XP guest only when `/dev/kvm` exists. GitHub-hosted runners skip it.
+`.github/workflows/xp-test.yml` is `workflow_dispatch` only. It probes `/dev/kvm` before checkout and does not run QEMU on GitHub-hosted pull requests.
 
 `.github/workflows/watch-upstream.yml` runs daily and on `workflow_dispatch`. It opens an `upstream-sync` issue when a newer `thongtech/go-legacy-win7` tag appears.
 

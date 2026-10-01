@@ -73,7 +73,7 @@ The XP SP3 ISO is fetched from Internet Archive by `scripts/fetch-xp-iso.sh` and
 
 `.github/workflows/ci.yml` builds the toolchain and runs `check-xp-pe.sh` on pull requests and `master`.
 
-`.github/workflows/xp-test.yml` runs the live guest only when `/dev/kvm` exists (typically self-hosted). GitHub-hosted runners skip that job.
+`.github/workflows/xp-test.yml` is `workflow_dispatch` only. It probes `/dev/kvm` before cloning the tree. Pull requests use `ci.yml` instead of waiting on QEMU.
 
 ## Forbidden static imports
 
