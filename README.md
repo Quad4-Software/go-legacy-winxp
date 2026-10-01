@@ -6,6 +6,12 @@
 
 LLMs are used to maintain and verify this repository: Cursor (Grok 4.6 / Grok 4.7). Changes are also verified by a human.
 
+## Verified on Windows XP
+
+Windows XP SP3 running `reticulum-go --version` and `testdata/xp-hello`, plus the 32-check smoke, all built with this toolchain for `windows/386` (PE 5.1):
+
+![Windows XP running reticulum-go and a Go test program](docs/xp-guest-reticulum-go.png)
+
 ![Gopher image](https://golang.org/doc/gopher/fiveyears.jpg)
 _Gopher image by [Renee French][rf], licensed under [Creative Commons 4.0 Attribution licence][cc4-by]._
 
@@ -126,7 +132,7 @@ The image `go` binary is at `/usr/local/go-legacy-winxp/bin/go`.
 
 The `CI` workflow builds this toolchain with a Go 1.24.6 bootstrap and runs `scripts/check-xp-pe.sh` on every pull request and on `master`. That is the check that must pass on GitHub-hosted runners.
 
-`XP Compatibility Test` only runs the live `dockurr/windows` guest when `/dev/kvm` is present (self-hosted). GitHub-hosted runners skip that job instead of failing. Run it locally with `./scripts/test-xp-docker.sh`.
+`XP Compatibility Test` is `workflow_dispatch` only. It does not run on pull requests, so hosted runners are not queued to wait on QEMU. Dispatch it on a machine with `/dev/kvm`, or run `./scripts/test-xp-docker.sh` locally. Guest results come back over the dockurr samba share (`Z:`).
 
 Draft binary releases are produced by `Go Build Release` (`workflow_dispatch`). The workflow builds a host toolchain from the dispatch commit, cross-compiles each `GOOS/GOARCH` target, and uploads archives to a draft GitHub release.
 
