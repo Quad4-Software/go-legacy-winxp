@@ -16,7 +16,10 @@ description: >-
    - Asserts PE OS and subsystem **5.1**
    - Fails if Vista+ APIs appear as static imports
 
-2. **Live guest (optional)** `./scripts/test-xp-docker.sh`
+2. **Live guest (optional)** `./scripts/test-xp-docker.sh
+python3 scripts/fetch-mcx-config.py
+./scripts/xp-guest-nat.sh
+./scripts/live-reticulum-xp.sh`
    - Requires Docker. Uses KVM when it is safe, otherwise TCG (`XP_KVM=N`)
    - Runs `dockurr/windows` with `VERSION=xp`
    - Guest runs `docker/xp/oem/install.bat` (first install) or `docker/xp/shared/run.bat` (retest)
@@ -35,6 +38,9 @@ cd src && ./make.bash && cd ..
 docker info
 ls -l /dev/kvm
 # Nested hosts often need TCG: XP_KVM=N ./scripts/test-xp-docker.sh
+python3 scripts/fetch-mcx-config.py
+./scripts/xp-guest-nat.sh
+./scripts/live-reticulum-xp.sh
 ```
 
 ## Commands
@@ -43,6 +49,9 @@ ls -l /dev/kvm
 ./scripts/check-xp-pe.sh
 ./scripts/fetch-xp-iso.sh
 ./scripts/test-xp-docker.sh
+python3 scripts/fetch-mcx-config.py
+./scripts/xp-guest-nat.sh
+./scripts/live-reticulum-xp.sh
 ```
 
 Environment:
@@ -92,7 +101,10 @@ These must not appear in the PE import table of XP smoke binaries (dynamic `GetP
 ## After changing XP runtime / link code
 
 1. `./scripts/check-xp-pe.sh`
-2. `./scripts/test-xp-docker.sh`
+2. `./scripts/test-xp-docker.sh
+python3 scripts/fetch-mcx-config.py
+./scripts/xp-guest-nat.sh
+./scripts/live-reticulum-xp.sh`
 3. Regenerate patch 0010 against the matching win7 checkout:
    `./scripts/regenerate-xp-patch.sh /tmp/go-legacy-win7`
    (see `skills/upstream-update/SKILL.md`)

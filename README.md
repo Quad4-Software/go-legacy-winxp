@@ -136,6 +136,23 @@ The `CI` workflow builds this toolchain with a Go 1.24.6 bootstrap and runs `scr
 
 Draft binary releases are produced by `Go Build Release` (`workflow_dispatch`). The workflow builds a host toolchain from the dispatch commit, cross-compiles each `GOOS/GOARCH` target, and uploads archives to a draft GitHub release.
 
+### Live reticulum-go on Windows XP
+
+Windows XP SP3 running [Reticulum-Go](https://github.com/Quad4-Software/Reticulum-Go) as a shared instance, with MeshChatX clearnet TCP and backbone hubs from https://meshchatx.com/api/mcx-interfaces (Catz, US-East, Germany 002, rns.h.acked.co.uk, RNS4All, Air Barcelona, ZHULONG1). All seven were Up with RX/TX traffic:
+
+![Windows XP reticulum-go status with MeshChatX hubs Up](docs/xp-guest-reticulum-go-live.png)
+
+After the guest is up and `reticulum-go-winxp.exe` is on the samba share (`Z:`):
+
+```
+python3 scripts/fetch-mcx-config.py
+./scripts/live-reticulum-xp.sh
+```
+
+`scripts/fetch-mcx-config.py` writes `testdata/xp-reticulum/config` with online clearnet IPv4 `TCPClientInterface` and `BackboneInterface` hubs. I2P and Yggdrasil are skipped. The guest config sets `enable_sandbox = no` and `shared_instance_type = tcp`.
+
+On hosts where the Docker compose network cannot originate internet TCP, `live-reticulum-xp.sh` starts `scripts/mcx-host-relay.py` on `172.18.0.1` and `scripts/xp-guest-nat.sh` DNATs the guest hub IPs through that relay. Status comes back as `docker/xp/shared/live-status.txt`.
+
 ### Windows XP guest smoke test (Docker)
 
 ```

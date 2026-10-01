@@ -1,0 +1,69 @@
+# reticulum-go config for Windows XP live tests.
+# Generated from https://meshchatx.com/api/mcx-interfaces at 2026-09-28T04:25:42+00:00
+# Sandbox off: Windows XP cannot use the full Go sandbox profile.
+# share_instance uses TCP because XP has no Unix sockets.
+
+[reticulum]
+  enable_transport = yes
+  share_instance = yes
+  shared_instance_type = tcp
+  shared_instance_port = 37428
+  instance_control_port = 37429
+  enable_sandbox = no
+  enable_seccomp = no
+  sandbox_strict = no
+  panic_on_interface_error = no
+
+[logging]
+  loglevel = 4
+  destination = file
+  format = text
+
+[[Catz Node (TCP)]]
+  type = TCPClientInterface
+  enabled = yes
+  target_host = 77.37.146.243
+  target_port = 4242
+ max_reconnect_tries = -1
+
+[[RNS_Transport_US-East]]
+  type = TCPClientInterface
+  enabled = yes
+  target_host = 45.77.109.86
+  target_port = 4965
+ max_reconnect_tries = -1
+
+[[RNS TCP Node Germany 002]]
+  type = TCPClientInterface
+  enabled = yes
+  target_host = 193.26.158.230
+  target_port = 4965
+ max_reconnect_tries = -1
+
+[[rns.h.acked.co.uk]]
+  type = BackboneInterface
+  enabled = yes
+  remote = 188.166.83.139
+  target_port = 4242
+ max_reconnect_tries = -1
+
+[[RNS4All]]
+  type = BackboneInterface
+  enabled = yes
+  remote = 172.245.119.67
+  target_port = 4242
+ max_reconnect_tries = -1
+
+[[Air Barcelona]]
+  type = TCPClientInterface
+  enabled = yes
+  target_host = 176.84.102.17
+  target_port = 4242
+ max_reconnect_tries = -1
+
+[[ZHULONG1 - Hong Kong Node]]
+  type = TCPClientInterface
+  enabled = yes
+  target_host = 103.195.4.226
+  target_port = 4242
+ max_reconnect_tries = -1

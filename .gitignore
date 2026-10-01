@@ -58,6 +58,9 @@ _testmain.go
 /docker/xp/shared/smoke-report.txt
 /docker/xp/shared/smoke*.out
 /docker/xp/shared/reticulum.out
+/docker/xp/shared/config
+/docker/xp/shared/live.bat
+/docker/xp/shared/live-*
 /docker/xp/shared/.keep
 /docker/xp/iso/*.iso
 /docker/xp/iso/*.partial
