@@ -37,7 +37,7 @@ scripts/test-xp-docker.sh
 docker/xp/                   dockurr/windows VERSION=xp smoke harness
 docker/build/                Toolchain container build
 testdata/xp-smoke/           Guest smoke program
-.github/workflows/           Release, XP test, and upstream watch
+.github/workflows/           CI (toolchain + PE), release, XP guest, upstream watch
 skills/                      Task skills for maintenance agents
 ```
 
@@ -47,7 +47,7 @@ Build artifacts (`bin/`, `pkg/`, generated `z*.go`) are local. Do not commit the
 
 1. **Never drop XP patches when updating.** Preserve every change covered by `patches/0010-Add-Windows-XP-support.patch` plus fork identity files listed below.
 2. **Do not replace this tree with stock Go.** Sync from `upstream` win7 tags first.
-3. **Keep fork branding.** `README.md` and `.github/workflows/go-build.yml` stay winxp-named (`master` fallback, not win7 `main` / `RELEASE_TOKEN`).
+3. **Keep fork branding.** `README.md` and `.github/workflows/go-build.yml` stay winxp-named (build the dispatch commit, not win7 `main` / `RELEASE_TOKEN`).
 4. **Regenerate `patches/0010-*.patch` after every successful sync** so the series matches the tree.
 5. **Do not invent new markdown docs** unless asked. Update `AGENTS.md` and `skills/` when workflows change.
 6. **No emojis** in repo text. Prefer plain ASCII in scripts and docs.
@@ -56,7 +56,7 @@ Build artifacts (`bin/`, `pkg/`, generated `z*.go`) are local. Do not commit the
 
 Authoritative list: `scripts/fork-files.list` (dirs and files preserved by scaffold).
 
-Includes README, AGENTS.md, workflows (`go-build`, `xp-test`, `watch-upstream`), `patches/0010`, `scripts/`, `docker/`, `testdata/`, and `skills/`.
+Includes README, AGENTS.md, workflows (`ci`, `go-build`, `xp-test`, `watch-upstream`), `patches/0010`, `scripts/`, `docker/`, `testdata/`, and `skills/`.
 
 ## XP source files (must survive upstream sync)
 
@@ -142,11 +142,15 @@ CGO_ENABLED=0 GOOS=windows GOARCH=386 ./bin/go build -o hello.exe .
 
 Expect PE OS and subsystem **5.1** for XP-compatible binaries.
 
-## Releases
+## Releases and CI
 
-`.github/workflows/go-build.yml` is `workflow_dispatch` with a version input. It builds matrix targets and publishes draft GitHub releases. Prefer release branch `release-branch.goX.Y` when present, else `master`.
+`.github/workflows/ci.yml` runs on pull requests and `master`. It bootstraps with Go 1.24.6, builds this tree, and runs `scripts/check-xp-pe.sh`.
 
-`.github/workflows/watch-upstream.yml` runs daily and on `workflow_dispatch`. It opens an `upstream-sync` issue when a newer `thongtech/go-legacy-win7` tag (`vX.Y.Z-N`) appears.
+`.github/workflows/go-build.yml` is `workflow_dispatch` with an optional version input (defaults to `VERSION`). It builds a host toolchain from the dispatch commit, cross-compiles each target, and publishes a draft GitHub release for that commit.
+
+`.github/workflows/xp-test.yml` runs the live XP guest only when `/dev/kvm` exists. GitHub-hosted runners skip it.
+
+`.github/workflows/watch-upstream.yml` runs daily and on `workflow_dispatch`. It opens an `upstream-sync` issue when a newer `thongtech/go-legacy-win7` tag appears.
 
 ## Do not
 

@@ -12,11 +12,13 @@ permissions:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -39,25 +41,26 @@ jobs:
           set -euo pipefail
 
           UPSTREAM_URL="https://github.com/thongtech/go-legacy-win7.git"
+          tag_re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$'
 
           newest="$(
             git ls-remote --tags "$UPSTREAM_URL" 'v1.*' \
               | awk '{print $2}' \
               | sed 's|refs/tags/||;s|\^{}||' \
-              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' \
+              | awk -v re="$tag_re" '$0 ~ re' \
               | sort -u -V \
               | tail -1
           )"
           if [[ -z "$newest" ]]; then
-            echo "no upstream vX.Y.Z-N tags found" >&2
+            echo "no matching upstream tags found" >&2
             exit 1
           fi
           echo "newest_upstream=$newest" >> "$GITHUB_OUTPUT"
           echo "Newest upstream tag: $newest"
 
           our_newest="$(
-            git tag -l 'v*.*.*-*' \
-              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' \
+            git tag -l 'v*' \
+              | awk -v re="$tag_re" '$0 ~ re' \
               | sort -u -V \
               | tail -1
           )"
@@ -108,7 +111,7 @@ jobs:
           existing="$(
             gh issue list --state open --label upstream-sync --json number,title \
               --jq ".[] | select(.title == \"$title\") | .number" \
-              | head -1
+              | awk 'NR==1'
           )"
           if [[ -n "$existing" ]]; then
             echo "Open issue #$existing already exists for $NEWEST"
