@@ -63,7 +63,7 @@ The XP SP3 ISO is fetched from Internet Archive by `scripts/fetch-xp-iso.sh` and
 ## Result protocol
 
 - Ignore intermediate markers such as `starting` in `result.txt`
-- Success only when the file content is `PASS`, `smoke.out` contains `go-legacy-winxp smoke ok`, `smoke: all checks passed`, `goarch=386`, and `check time_zone: ok`
+- Success only when the file content is `PASS`, `smoke.out` contains `go-legacy-winxp smoke ok`, `smoke: all checks passed`, `goarch=386`, `init_rfc3339=` (issue 10 `time.Zone` path), and `check time_json: ok`
 - `smoke.exit` must be `0` on PASS
 - Guest also writes `smoke.log` (status + exit + output). Host writes `smoke-report.txt` after the run
 - Failure when content is `FAIL`, output validation fails, or on timeout

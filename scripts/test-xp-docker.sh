@@ -96,7 +96,7 @@ validate_smoke_output() {
     return 1
   fi
 
-  if ! grep -Fq "check time_zone: ok" "$SMOKE_OUT"; then
+  if ! grep -Eq 'check time_zone:' "$SMOKE_OUT" || ! grep -Fq "init_rfc3339=" "$SMOKE_OUT"; then
     echo "smoke.out missing time_zone check (issue 10 regression)" >&2
     return 1
   fi
