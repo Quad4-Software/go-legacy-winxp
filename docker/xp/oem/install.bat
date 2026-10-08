@@ -1,5 +1,5 @@
 @echo off
-setlocal enableextensions
+setlocal enableextensions enabledelayedexpansion
 
 set SHARE=
 set RESULT=
@@ -38,8 +38,8 @@ echo starting > "%RESULT%"
 :run_tests
 if exist C:\OEM\reticulum-go-winxp.exe (
   C:\OEM\reticulum-go-winxp.exe --version > C:\OEM\reticulum.out 2>&1
-  set EXITCODE=%ERRORLEVEL%
-  if %EXITCODE% neq 0 goto write_result
+  set EXITCODE=!ERRORLEVEL!
+  if !EXITCODE! neq 0 goto write_result
   findstr /C:"reticulum-go" C:\OEM\reticulum.out >nul
   if errorlevel 1 (
     echo reticulum-go version output missing marker > C:\OEM\smoke-386.out
@@ -55,7 +55,7 @@ if not exist C:\OEM\xp-smoke-386.exe (
 )
 
 C:\OEM\xp-smoke-386.exe > C:\OEM\smoke.tmp 2>&1
-set EXITCODE=%ERRORLEVEL%
+set EXITCODE=!ERRORLEVEL!
 if exist C:\OEM\reticulum.out (
   echo reticulum-go --version ok > C:\OEM\smoke-386.out
   type C:\OEM\reticulum.out >> C:\OEM\smoke-386.out
@@ -63,21 +63,21 @@ if exist C:\OEM\reticulum.out (
   echo. > C:\OEM\smoke-386.out
 )
 type C:\OEM\smoke.tmp >> C:\OEM\smoke-386.out
-if %EXITCODE% neq 0 goto write_result
+if !EXITCODE! neq 0 goto write_result
 
 set STATUS=PASS
 
 :write_result
-if not "%SHARE%"=="" (
-  echo %STATUS% > "%RESULT%"
-  echo %EXITCODE% > "%EXITFILE%"
-  if exist C:\OEM\smoke-386.out copy /Y C:\OEM\smoke-386.out "%OUT%" >nul
-  if not exist C:\OEM\smoke-386.out echo no smoke output captured > "%OUT%"
-  if exist C:\OEM\reticulum.out copy /Y C:\OEM\reticulum.out "%SHARE%\reticulum.out" >nul
-  echo status=%STATUS% > "%LOGFILE%"
-  echo exit=%EXITCODE% >> "%LOGFILE%"
-  echo --- stdout stderr --- >> "%LOGFILE%"
-  if exist "%OUT%" type "%OUT%" >> "%LOGFILE%"
+if not "!SHARE!"=="" (
+  echo !STATUS! > "!RESULT!"
+  echo !EXITCODE! > "!EXITFILE!"
+  if exist C:\OEM\smoke-386.out copy /Y C:\OEM\smoke-386.out "!OUT!" >nul
+  if not exist C:\OEM\smoke-386.out echo no smoke output captured > "!OUT!"
+  if exist C:\OEM\reticulum.out copy /Y C:\OEM\reticulum.out "!SHARE!\reticulum.out" >nul
+  echo status=!STATUS! > "!LOGFILE!"
+  echo exit=!EXITCODE! >> "!LOGFILE!"
+  echo --- stdout stderr --- >> "!LOGFILE!"
+  if exist "!OUT!" type "!OUT!" >> "!LOGFILE!"
 )
 
 REM Boot-time retest hook for cached disks.
@@ -86,8 +86,8 @@ echo @echo off > "%USERPROFILE%\Start Menu\Programs\Startup\go-xp-retest.bat"
 echo if exist \\host.lan\Data\run.bat call \\host.lan\Data\run.bat >> "%USERPROFILE%\Start Menu\Programs\Startup\go-xp-retest.bat"
 echo if exist Z:\run.bat call Z:\run.bat >> "%USERPROFILE%\Start Menu\Programs\Startup\go-xp-retest.bat"
 
-if not "%SHARE%"=="" (
-  if "%STATUS%"=="PASS" shutdown -s -t 15
+if not "!SHARE!"=="" (
+  if "!STATUS!"=="PASS" shutdown -s -t 15
 )
 
 endlocal
