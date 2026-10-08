@@ -11,6 +11,12 @@ if [[ ! -x "$GO" ]]; then
   exit 1
 fi
 
+REG_ZSYSCALL="$ROOT/src/internal/syscall/windows/registry/zsyscall_windows.go"
+if ! grep -A12 'func regLoadMUIString(' "$REG_ZSYSCALL" | grep -q 'procRegLoadMUIStringW.Find()'; then
+  echo "issue 10: regLoadMUIString must call Find() before Addr() on XP" >&2
+  exit 1
+fi
+
 mkdir -p "$OUTDIR"
 export CGO_ENABLED=0
 
@@ -47,6 +53,9 @@ FORBIDDEN = {
     b"GetErrorMode",
     b"SetFileInformationByHandle",
     b"GetFinalPathNameByHandle",
+    b"RegLoadMUIStringW",
+    b"GetFileInformationByHandleEx",
+    b"GetTempPath2W",
 }
 
 def read_u16(data, off):

@@ -63,7 +63,7 @@ The XP SP3 ISO is fetched from Internet Archive by `scripts/fetch-xp-iso.sh` and
 ## Result protocol
 
 - Ignore intermediate markers such as `starting` in `result.txt`
-- Success only when the file content is `PASS`, `smoke.out` contains `go-legacy-winxp smoke ok`, `smoke: all checks passed`, and `goarch=386`
+- Success only when the file content is `PASS`, `smoke.out` contains `go-legacy-winxp smoke ok`, `smoke: all checks passed`, `goarch=386`, and `check time_zone: ok`
 - `smoke.exit` must be `0` on PASS
 - Guest also writes `smoke.log` (status + exit + output). Host writes `smoke-report.txt` after the run
 - Failure when content is `FAIL`, output validation fails, or on timeout
@@ -88,6 +88,9 @@ These must not appear in the PE import table of XP smoke binaries (dynamic `GetP
 - `GetErrorMode`
 - `SetFileInformationByHandle`
 - `GetFinalPathNameByHandle`
+- `RegLoadMUIStringW`
+- `GetFileInformationByHandleEx`
+- `GetTempPath2W`
 
 ## After changing XP runtime / link code
 

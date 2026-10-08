@@ -81,8 +81,8 @@ validate_smoke_output() {
   fi
 
   check_count="$(grep -Eo 'smoke: [0-9]+ checks passed' "$SMOKE_OUT" | tail -1 | grep -Eo '[0-9]+')"
-  if [[ -z "$check_count" || "$check_count" -lt 30 ]]; then
-    echo "smoke.out reports only ${check_count:-0} checks (expected at least 30)" >&2
+  if [[ -z "$check_count" || "$check_count" -lt 60 ]]; then
+    echo "smoke.out reports only ${check_count:-0} checks (expected at least 60)" >&2
     return 1
   fi
 
@@ -93,6 +93,16 @@ validate_smoke_output() {
 
   if ! grep -Fq "goarch=386" "$SMOKE_OUT"; then
     echo "smoke.out missing goarch=386" >&2
+    return 1
+  fi
+
+  if ! grep -Fq "check time_zone: ok" "$SMOKE_OUT"; then
+    echo "smoke.out missing time_zone check (issue 10 regression)" >&2
+    return 1
+  fi
+
+  if ! grep -Fq "check time_json: ok" "$SMOKE_OUT"; then
+    echo "smoke.out missing time_json check (issue 10 regression)" >&2
     return 1
   fi
 

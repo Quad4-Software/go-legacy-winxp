@@ -66,6 +66,7 @@ Authoritative list: `scripts/xp-files.list`. Summary:
 - `src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go`
 - `src/internal/runtime/syscall/windows/defs_windows.go`
 - `src/internal/syscall/windows/at_windows.go`
+- `src/internal/syscall/windows/registry/zsyscall_windows.go` (RegLoadMUIStringW Find, issue 10)
 - `src/internal/syscall/windows/syscall_windows.go`
 - `src/internal/syscall/windows/symlink_windows.go`
 - `src/internal/syscall/windows/types_windows.go`
