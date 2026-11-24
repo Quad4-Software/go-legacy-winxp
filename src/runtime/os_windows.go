@@ -127,13 +127,10 @@ var (
 	_WerGetFlags,
 	_WerSetFlags stdFunction
 
-	// Use ProcessPrng to generate cryptographically random data, falling back to
-	// RtlGenRandom where ProcessPrng is unavailable. Only one is ever loaded.
-	//
-	// RtlGenRandom is not listed in advapi32.dll under that name. It has to be
-	// found as SystemFunction036.
-	_ProcessPrng  stdFunction
-	_RtlGenRandom stdFunction
+	// Use ProcessPrng to generate cryptographically random data. Where
+	// bcryptprimitives.dll has no ProcessPrng export, RtlGenRandom is
+	// loaded into it instead.
+	_ProcessPrng stdFunction
 
 	// Load ntdll.dll manually during startup, otherwise Mingw
 	// links wrong printf function to cgo executable (see issue
@@ -252,38 +249,25 @@ func windows_GetSystemDirectory() string {
 
 func windowsLoadSystemLib(name []uint16) uintptr {
 	const _LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
-	if h := stdcall(_LoadLibraryExW, uintptr(unsafe.Pointer(&name[0])), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32); h != 0 {
-		return h
+	const _ERROR_INVALID_PARAMETER = 87
+	h := stdcall(_LoadLibraryExW, uintptr(unsafe.Pointer(&name[0])), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32)
+	// Only ERROR_INVALID_PARAMETER (Windows 7 without KB2533623) goes by path,
+	// since a load by path searches the program's directory first.
+	if h == 0 && getlasterror() == _ERROR_INVALID_PARAMETER {
+		h = loadSystemLibFromSysDir(name)
 	}
-	// LoadLibraryExW rejects LOAD_LIBRARY_SEARCH_SYSTEM32 with
-	// ERROR_INVALID_PARAMETER on systems that predate the flag, which
-	// includes Windows 7 without KB2533623 installed. Naming the file
-	// in the system directory is as safe against DLL preloading as the
-	// flag is, so use that instead.
-	return loadSystemLibFromSysDir(name)
+	return h
 }
 
-var sysDirectory16 [_MAX_PATH + 1]uint16
-var sysDirectory16Len uintptr
-
-// loadSystemLibFromSysDir loads name by its absolute path in the Windows
-// system directory, which it looks up on first use.
 func loadSystemLibFromSysDir(name []uint16) uintptr {
-	if sysDirectory16Len == 0 {
-		l := stdcall(_GetSystemDirectoryW, uintptr(unsafe.Pointer(&sysDirectory16[0])), uintptr(len(sysDirectory16)-1))
-		if l == 0 || l > uintptr(len(sysDirectory16)-1) {
-			return 0
-		}
-		sysDirectory16[l] = '\\'
-		sysDirectory16Len = l + 1
-	}
 	// name is NUL-terminated, so path is too.
 	var path [_MAX_PATH + 1]uint16
-	if sysDirectory16Len+uintptr(len(name)) > uintptr(len(path)) {
+	l := stdcall(_GetSystemDirectoryW, uintptr(unsafe.Pointer(&path[0])), uintptr(len(path)-1))
+	if l == 0 || l+1+uintptr(len(name)) > uintptr(len(path)) {
 		return 0
 	}
-	copy(path[:], sysDirectory16[:sysDirectory16Len])
-	copy(path[sysDirectory16Len:], name)
+	path[l] = '\\'
+	copy(path[l+1:], name)
 	return stdcall(_LoadLibraryExW, uintptr(unsafe.Pointer(&path[0])), 0, 0)
 }
 
@@ -312,11 +296,15 @@ func loadOptionalSyscalls() {
 		_ProcessPrng = windowsFindfunc(bcryptPrimitives, []byte("ProcessPrng\000"))
 	}
 	if _ProcessPrng == nil {
-		// bcryptprimitives.dll ships with Windows 7 but exports
-		// ProcessPrng only from Windows 8. RtlGenRandom is what the
-		// standard library used before Go 1.22.
-		_RtlGenRandom = loadRtlGenRandom()
-		if _RtlGenRandom == nil {
+		// bcryptprimitives.dll exports ProcessPrng only from Windows 8.
+		// RtlGenRandom takes the same arguments and answers the same way,
+		// so it takes ProcessPrng's place.
+		if a32 := windowsLoadSystemLib(advapi32dll[:]); a32 != 0 {
+			// The RtlGenRandom is not listed in advapi32.dll, instead
+			// RtlGenRandom function can be found by searching for SystemFunction036.
+			_ProcessPrng = windowsFindfunc(a32, []byte("SystemFunction036\000"))
+		}
+		if _ProcessPrng == nil {
 			throw("neither ProcessPrng nor RtlGenRandom found")
 		}
 	}
@@ -351,17 +339,6 @@ func loadOptionalSyscalls() {
 	_CreateWaitableTimerExW = windowsFindfunc(k32, []byte("CreateWaitableTimerExW\000"))
 	_GetQueuedCompletionStatusEx = windowsFindfunc(k32, []byte("GetQueuedCompletionStatusEx\000"))
 	_RaiseFailFastException = windowsFindfunc(k32, []byte("RaiseFailFastException\000"))
-}
-
-// loadRtlGenRandom returns RtlGenRandom from advapi32.dll, or nil if it
-// cannot be found. It is kept separate from loadOptionalSyscalls so that
-// the fallback can be exercised on a system that has ProcessPrng.
-func loadRtlGenRandom() stdFunction {
-	a32 := windowsLoadSystemLib(advapi32dll[:])
-	if a32 == 0 {
-		return nil
-	}
-	return windowsFindfunc(a32, []byte("SystemFunction036\000"))
 }
 
 func monitorSuspendResume() {
@@ -569,21 +546,8 @@ func osinit() {
 
 //go:nosplit
 func readRandom(r []byte) int {
-	fn := _ProcessPrng
-	if fn == nil {
-		fn = _RtlGenRandom
-	}
-	return readRandomFrom(fn, r)
-}
-
-// readRandomFrom fills r using fn, which must take a buffer and a length
-// and return a non-zero byte on success, as ProcessPrng and RtlGenRandom
-// both do.
-//
-//go:nosplit
-func readRandomFrom(fn stdFunction, r []byte) int {
 	n := 0
-	if stdcall(fn, uintptr(unsafe.Pointer(&r[0])), uintptr(len(r)))&0xff != 0 {
+	if stdcall(_ProcessPrng, uintptr(unsafe.Pointer(&r[0])), uintptr(len(r)))&0xff != 0 {
 		n = len(r)
 	}
 	return n
@@ -842,7 +806,13 @@ func semacreate(mp *m) {
 //
 //go:nowritebarrierrec
 func newosproc(mp *m) {
-	thandle, err := createThread(0, unsafe.Pointer(abi.FuncPCABI0(tstart_stdcall)), unsafe.Pointer(mp))
+	// LockOSThread can reach newosproc on a goroutine stack when starting
+	// the template thread. createThread does not switch stacks itself.
+	var thandle uintptr
+	var err uint32
+	systemstack(func() {
+		thandle, err = createThread(0, unsafe.Pointer(abi.FuncPCABI0(tstart_stdcall)), unsafe.Pointer(mp))
+	})
 	if thandle == 0 {
 		if atomic.Load(&exiting) != 0 {
 			// CreateThread may fail if called
@@ -1264,6 +1234,23 @@ const preemptMSupported = true
 // suspending each other.
 var suspendLock mutex
 
+// threadPausedLockRank warns the runtime against acquiring new locks on this
+// thread while it has another thread paused. The holder of this lock rank is
+// effectively a signal handler for a paused thread, which may be holding
+// arbitrary locks.
+//
+// The warning takes two concrete forms: First, unlock2 will see that this
+// thread is holding other locks, so won't try to flush the mutex contention
+// buffer (which can involve acquiring another lock). Second, builds with
+// GOEXPERIMENT=staticlockranking (currently broken, https://go.dev/issue/76058)
+// will report a rank violation.
+//
+// suspendLock serializes the transition into "suspended", but it's fine for
+// multiple threads to be in the suspended state concurrently, with each of
+// their sponsors independently using threadPausedLockRank to discourage
+// themselves from acquiring new locks.
+const threadPausedLockRank = lockRankLeafRank
+
 func preemptM(mp *m) {
 	if mp == getg().m {
 		throw("self-preempt")
@@ -1306,6 +1293,9 @@ func preemptM(mp *m) {
 	// actually suspended.
 	lock(&suspendLock)
 
+	// Signal handler rules are in effect; don't acquire new locks.
+	acquireLockRankAndM(threadPausedLockRank)
+
 	// Suspend the thread.
 	if int32(stdcall(_SuspendThread, thread)) == -1 {
 		unlock(&suspendLock)
@@ -1314,6 +1304,7 @@ func preemptM(mp *m) {
 		// The thread no longer exists. This shouldn't be
 		// possible, but just acknowledge the request.
 		mp.preemptGen.Add(1)
+		releaseLockRankAndM(threadPausedLockRank)
 		return
 	}
 
@@ -1348,6 +1339,8 @@ func preemptM(mp *m) {
 
 	stdcall(_ResumeThread, thread)
 	stdcall(_CloseHandle, thread)
+
+	releaseLockRankAndM(threadPausedLockRank)
 }
 
 // osPreemptExtEnter is called before entering external code that may

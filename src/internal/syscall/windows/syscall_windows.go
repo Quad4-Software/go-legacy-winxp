@@ -41,6 +41,7 @@ const (
 	ERROR_INVALID_NAME           syscall.Errno = 123
 	ERROR_NEGATIVE_SEEK          syscall.Errno = 131
 	ERROR_LOCK_FAILED            syscall.Errno = 167
+	ERROR_DIRECTORY              syscall.Errno = 267
 	ERROR_IO_INCOMPLETE          syscall.Errno = 996
 	ERROR_NO_TOKEN               syscall.Errno = 1008
 	ERROR_NO_UNICODE_TRANSLATION syscall.Errno = 1113
@@ -413,18 +414,19 @@ const (
 
 //sys	GetFinalPathNameByHandle(file syscall.Handle, filePath *uint16, filePathSize uint32, flags uint32) (n uint32, err error) = kernel32.GetFinalPathNameByHandleW
 
-func ErrorLoadingGetTempPath2() error {
-	return procGetTempPath2W.Find()
-}
-
 func ErrorLoadingGetFinalPathNameByHandle() error {
 	return procGetFinalPathNameByHandleW.Find()
+}
+
+func ErrorLoadingGetTempPath2() error {
+	return procGetTempPath2W.Find()
 }
 
 //sys	CreateEnvironmentBlock(block **uint16, token syscall.Token, inheritExisting bool) (err error) = userenv.CreateEnvironmentBlock
 //sys	DestroyEnvironmentBlock(block *uint16) (err error) = userenv.DestroyEnvironmentBlock
 //sys	CreateEvent(eventAttrs *SecurityAttributes, manualReset uint32, initialState uint32, name *uint16) (handle syscall.Handle, err error) = kernel32.CreateEventW
 //sys	SetEvent(event syscall.Handle) (err error) = kernel32.SetEvent
+//sys	Sleep(milliseconds uint32) = kernel32.Sleep
 //sys	WaitForMultipleObjects(count uint32, handles *syscall.Handle, waitAll bool, waitMilliseconds uint32) (event uint32, err error) [failretval==0xffffffff] = kernel32.WaitForMultipleObjects
 
 //sys	ProcessPrng(buf []byte) (err error) = bcryptprimitives.ProcessPrng
@@ -546,6 +548,31 @@ const (
 //sys	GetOverlappedResult(handle syscall.Handle, overlapped *syscall.Overlapped, done *uint32, wait bool) (err error)
 //sys	CreateNamedPipe(name *uint16, flags uint32, pipeMode uint32, maxInstances uint32, outSize uint32, inSize uint32, defaultTimeout uint32, sa *syscall.SecurityAttributes) (handle syscall.Handle, err error)  [failretval==syscall.InvalidHandle] = CreateNamedPipeW
 
+// TP_CALLBACK_ENVIRON is version 3, as TpInitializeCallbackEnviron builds it.
+type TP_CALLBACK_ENVIRON struct {
+	Version                    uint32
+	Pool                       uintptr
+	CleanupGroup               uintptr
+	CleanupGroupCancelCallback uintptr
+	RaceDll                    uintptr
+	ActivationContext          uintptr
+	FinalizationCallback       uintptr
+	Flags                      uint32
+	CallbackPriority           int32
+	Size                       uint32
+}
+
+const (
+	TP_CALLBACK_ENVIRON_VERSION = 3
+	TP_CALLBACK_PRIORITY_NORMAL = 1
+)
+
+//sys	CreateThreadpool(reserved uintptr) (pool uintptr, err error) [failretval==0] = kernel32.CreateThreadpool
+//sys	SetThreadpoolThreadMinimum(pool uintptr, min uint32) (err error) = kernel32.SetThreadpoolThreadMinimum
+//sys	SetThreadpoolThreadMaximum(pool uintptr, max uint32) = kernel32.SetThreadpoolThreadMaximum
+//sys	CreateThreadpoolWork(callback uintptr, context uintptr, env *TP_CALLBACK_ENVIRON) (work uintptr, err error) [failretval==0] = kernel32.CreateThreadpoolWork
+//sys	SubmitThreadpoolWork(work uintptr) = kernel32.SubmitThreadpoolWork
+
 //sys	ReOpenFile(filehandle syscall.Handle, desiredAccess uint32, shareMode uint32, flagAndAttributes uint32) (handle syscall.Handle, err error) [failretval==syscall.InvalidHandle]
 
 // NTStatus corresponds with NTSTATUS, error values returned by ntdll.dll and
@@ -572,6 +599,9 @@ const (
 	STATUS_DIRECTORY_NOT_EMPTY       NTStatus = 0xC0000101
 	STATUS_NOT_A_DIRECTORY           NTStatus = 0xC0000103
 	STATUS_CANNOT_DELETE             NTStatus = 0xC0000121
+	STATUS_SHARING_VIOLATION         NTStatus = 0xC0000043
+	STATUS_DELETE_PENDING            NTStatus = 0xC0000056
+	STATUS_OBJECT_NAME_NOT_FOUND     NTStatus = 0xC0000034
 	STATUS_REPARSE_POINT_ENCOUNTERED NTStatus = 0xC000050B
 	STATUS_NOT_SUPPORTED             NTStatus = 0xC00000BB
 	STATUS_INVALID_PARAMETER         NTStatus = 0xC000000D
@@ -602,6 +632,9 @@ type FILE_MODE_INFORMATION struct {
 // NT Native APIs
 //sys   NtCreateFile(handle *syscall.Handle, access uint32, oa *OBJECT_ATTRIBUTES, iosb *IO_STATUS_BLOCK, allocationSize *int64, attributes uint32, share uint32, disposition uint32, options uint32, eabuffer unsafe.Pointer, ealength uint32) (ntstatus error) = ntdll.NtCreateFile
 //sys   NtOpenFile(handle *syscall.Handle, access uint32, oa *OBJECT_ATTRIBUTES, iosb *IO_STATUS_BLOCK, share uint32, options uint32) (ntstatus error) = ntdll.NtOpenFile
+// This function returns 1 byte BOOLEAN rather than the 4 byte BOOL.
+//sys   RtlDosPathNameToNtPathName_U(dosName *uint16, ntName *NTUnicodeString, filePart **uint16, reserved unsafe.Pointer) (ok uint8) = ntdll.RtlDosPathNameToNtPathName_U
+//sys   RtlFreeUnicodeString(s *NTUnicodeString) = ntdll.RtlFreeUnicodeString
 //sys   rtlNtStatusToDosErrorNoTeb(ntstatus NTStatus) (ret syscall.Errno) = ntdll.RtlNtStatusToDosErrorNoTeb
 //sys   NtSetInformationFile(handle syscall.Handle, iosb *IO_STATUS_BLOCK, inBuffer unsafe.Pointer, inBufferLen uint32, class uint32) (ntstatus error) = ntdll.NtSetInformationFile
 //sys	RtlIsDosDeviceName_U(name *uint16) (ret uint32) = ntdll.RtlIsDosDeviceName_U

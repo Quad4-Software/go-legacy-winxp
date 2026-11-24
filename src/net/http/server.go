@@ -475,7 +475,7 @@ type response struct {
 	// request. Instead, when this is set, we stop reading
 	// subsequent requests on this connection and stop reading
 	// input from it.
-	requestBodyLimitHit bool
+	requestBodyLimitHit atomic.Bool
 
 	// trailers are the headers to be sent after the handler
 	// finishes writing the body. This field is initialized from
@@ -564,11 +564,7 @@ func (w *response) declareTrailer(k string) {
 // requestTooLarge is called by maxBytesReader when too much input has
 // been read from the client.
 func (w *response) requestTooLarge() {
-	w.closeAfterReply = true
-	w.requestBodyLimitHit = true
-	if !w.wroteHeader {
-		w.Header().Set("Connection", "close")
-	}
+	w.requestBodyLimitHit.Store(true)
 }
 
 // disableWriteContinue stops Request.Body.Read from sending an automatic
@@ -1318,7 +1314,11 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 
 	w := cw.res
 	keepAlivesEnabled := w.conn.server.doKeepAlives()
-	isHEAD := w.req.Method == "HEAD"
+
+	// Consult w.conn.lastMethod instead of w.req.Method,
+	// just in case a middleware layer modified w.req.
+	isHEAD := w.conn.lastMethod == "HEAD"
+	isCONNECT := w.conn.lastMethod == "CONNECT"
 
 	// header is written out to w.conn.buf below. Depending on the
 	// state of the handler, we either own the map or not. If we
@@ -1430,6 +1430,15 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 		w.closeAfterReply = true
 	}
 
+	if isCONNECT {
+		// Don't reuse a connection after a CONNECT, even if we reject it.
+		w.closeAfterReply = true
+	}
+
+	if w.requestBodyLimitHit.Load() {
+		w.closeAfterReply = true
+	}
+
 	// We do this by default because there are a number of clients that
 	// send a full request before starting to read the response, and they
 	// can deadlock if we start writing the response with unconsumed body
@@ -1504,7 +1513,13 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 		hasCL = false
 	}
 
-	if w.req.Method == "HEAD" || !bodyAllowedForStatus(code) || code == StatusNoContent {
+	isSuccessfulCONNECT := isCONNECT && code >= 200 && code < 300
+	if isSuccessfulCONNECT {
+		// Tunnel established, connection is no longer HTTP.
+		delHeader("Transfer-Encoding")
+		delHeader("Content-Length")
+		setHeader.contentLength = nil
+	} else if isHEAD || !bodyAllowedForStatus(code) || code == StatusNoContent {
 		// Response has no body.
 		delHeader("Transfer-Encoding")
 	} else if hasCL {
@@ -1546,6 +1561,10 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 		return
 	}
 
+	if w.requestBodyLimitHit.Load() {
+		w.closeAfterReply = true
+	}
+
 	// Only override the Connection header if it is not a successful
 	// protocol switch response and if KeepAlives are not enabled.
 	// See https://golang.org/issue/36381.
@@ -1554,8 +1573,13 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 		!isProtocolSwitchResponse(w.status, header)
 	if delConnectionHeader {
 		delHeader("Connection")
-		if w.req.ProtoAtLeast(1, 1) {
+		// Don't set Connection: close on a 2xx CONNECT response,
+		// even though we will close the connection if the handler doesn't hijack it.
+		// If the handler does hijack the connection, the Connection: close is confusing.
+		if w.req.ProtoAtLeast(1, 1) && !isSuccessfulCONNECT {
 			setHeader.connection = "close"
+		} else {
+			setHeader.connection = ""
 		}
 	}
 
@@ -1724,7 +1748,7 @@ func (w *response) finishRequest() {
 // shouldReuseConnection reports whether the underlying TCP connection can be reused.
 // It must only be called after the handler is done executing.
 func (w *response) shouldReuseConnection() bool {
-	if w.closeAfterReply {
+	if w.closeAfterReply || w.requestBodyLimitHit.Load() {
 		// The request or something set while executing the
 		// handler indicated we shouldn't reuse this
 		// connection.
@@ -2144,7 +2168,7 @@ func (c *conn) serve(ctx context.Context) {
 		w.finishRequest()
 		c.rwc.SetWriteDeadline(time.Time{})
 		if !w.shouldReuseConnection() {
-			if w.requestBodyLimitHit || w.closedRequestBodyEarly() {
+			if w.requestBodyLimitHit.Load() || w.closedRequestBodyEarly() {
 				c.closeWriteAndWait()
 			}
 			return
@@ -3100,9 +3124,12 @@ type Server struct {
 	// MaxHeaderValueCount controls the maximum number of header
 	// values that the server is willing to parse from a request.
 	// If zero, DefaultMaxHeaderValueCount is used.
-	// Note that comma-separated values in a single header line are
-	// counted once, while values sent as multiple header lines are
-	// counted multiple times.
+	// Comma-separated values in a single header line are counted
+	// once, while values sent as multiple header lines are
+	// counted multiple times. An exception to this is the Trailer
+	// header, whose comma-separated values are counted separately,
+	// as each of them is expected to be received later as an
+	// individual trailer header line.
 	MaxHeaderValueCount int
 
 	// TLSNextProto optionally specifies a function to take over

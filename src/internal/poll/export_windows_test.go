@@ -9,8 +9,3 @@ package poll
 func SkipsCompletionPortOnSuccess(fd *FD) bool {
 	return !fd.waitOnSuccess
 }
-
-var (
-	IsStreamSocket               = isStreamSocket
-	TruncatedRecvSkipsCompletion = truncatedRecvSkipsCompletion
-)

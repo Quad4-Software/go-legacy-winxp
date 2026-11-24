@@ -11,6 +11,7 @@ import (
 	"go/version"
 	"internal/buildcfg"
 	"internal/pkgbits"
+	"log"
 	"os"
 	"slices"
 	"strings"
@@ -82,8 +83,9 @@ type pkgWriter struct {
 
 	// Maps from types2.Objects back to their syntax.Decl.
 
-	funDecls map[*types2.Func]*syntax.FuncDecl
-	typDecls map[*types2.TypeName]typeDeclGen
+	funDecls  map[*types2.Func]*syntax.FuncDecl
+	typDecls  map[*types2.TypeName]typeDeclGen
+	methodIdx map[*types2.Func]int // method declaration order, for x/tools decoder (#81188)
 
 	// linknames maps package-scope objects to their linker symbol name,
 	// if specified by a //go:linkname or //go:linknamestd directive.
@@ -114,8 +116,9 @@ func newPkgWriter(m posMap, pkg *types2.Package, info *types2.Info, otherInfo ma
 
 		posBasesIdx: make(map[*syntax.PosBase]index),
 
-		funDecls: make(map[*types2.Func]*syntax.FuncDecl),
-		typDecls: make(map[*types2.TypeName]typeDeclGen),
+		funDecls:  make(map[*types2.Func]*syntax.FuncDecl),
+		typDecls:  make(map[*types2.TypeName]typeDeclGen),
+		methodIdx: make(map[*types2.Func]int),
 
 		linknames: make(map[types2.Object]struct {
 			remote string
@@ -863,7 +866,7 @@ func (w *writer) doObj(wext *writer, obj types2.Object) pkgbits.CodeObj {
 			// Unified IR panics are the worst; this is a huge help in debugging them.
 			defer func() {
 				if p := recover(); p != nil {
-					fmt.Printf("Intercepted unified IR writer panic for function %s, repanicking", obj.FullName())
+					log.Printf("Intercepted unified IR writer panic for function %s, repanicking", obj.FullName())
 					panic(p)
 				}
 			}()
@@ -879,6 +882,9 @@ func (w *writer) doObj(wext *writer, obj types2.Object) pkgbits.CodeObj {
 			w.selector(obj)
 			w.typeParamNames(sig.RecvTypeParams())
 			w.param(sig.Recv())
+			if w.Version().Has(pkgbits.PreserveMethodOrder) {
+				w.Len(w.p.methodIdx[obj.Origin()])
+			}
 		} else {
 			if w.Version().Has(pkgbits.GenericMethods) {
 				w.Bool(false) // function
@@ -910,6 +916,14 @@ func (w *writer) doObj(wext *writer, obj types2.Object) pkgbits.CodeObj {
 
 		named := obj.Type().(*types2.Named)
 		assert(named.TypeArgs() == nil)
+
+		// Record method indices before encoding anything else, as
+		// encoding the underlying type may transitively encode one of
+		// named's generic methods (e.g., via a function body that
+		// calls it), which needs its index.
+		for i := range named.NumMethods() {
+			w.p.methodIdx[named.Method(i)] = i
+		}
 
 		w.pos(obj)
 		w.typeParamNames(named.TypeParams())
@@ -1054,6 +1068,9 @@ func (w *writer) method(wext *writer, meth *types2.Func) {
 	sig := meth.Type().(*types2.Signature)
 
 	w.Sync(pkgbits.SyncMethod)
+	if w.Version().Has(pkgbits.PreserveMethodOrder) {
+		w.Len(w.p.methodIdx[meth.Origin()])
+	}
 	w.pos(meth)
 	w.selector(meth)
 	w.typeParamNames(sig.RecvTypeParams())

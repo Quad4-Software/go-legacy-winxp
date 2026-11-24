@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"debug/pe"
 	"fmt"
-	"internal/platform"
 	"internal/testenv"
 	"os"
 	"path/filepath"

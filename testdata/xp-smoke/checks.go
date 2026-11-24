@@ -18,6 +18,20 @@ import (
 	"time"
 )
 
+// removeWithRetry retries os.Remove: on Windows a just-written file can be
+// transiently locked by indexers or filters, which surfaces as a sharing
+// violation.
+func removeWithRetry(path string) error {
+	var err error
+	for i := 0; i < 10; i++ {
+		if err = os.Remove(path); err == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return err
+}
+
 func runAllChecks(passed *int) {
 	section("runtime")
 	runCheck("runtime_cpus", checkRuntimeCPUs, passed)
@@ -113,6 +127,8 @@ func runAllChecks(passed *int) {
 	runCheck("io_multi", checkIOMulti, passed)
 	runCheck("syscall_timezone", checkSyscallTimezone, passed)
 	runCheck("log_bytes", checkLogBytes, passed)
+
+	extraChecks(passed)
 }
 
 func checkRuntimeCPUs() error {
@@ -285,7 +301,7 @@ func checkReadWriteFile(dir string) error {
 	if string(data) != "ok\n" {
 		return fmt.Errorf("contents=%q", data)
 	}
-	return os.Remove(path)
+	return removeWithRetry(path)
 }
 
 func checkOpenReadWrite(dir string) error {
@@ -316,7 +332,7 @@ func checkOpenReadWrite(dir string) error {
 	if string(buf) != "data" {
 		return fmt.Errorf("read=%q", buf)
 	}
-	return os.Remove(path)
+	return removeWithRetry(path)
 }
 
 func checkRename(dir string) error {
@@ -331,7 +347,7 @@ func checkRename(dir string) error {
 	if _, err := os.Stat(from); err == nil {
 		return fmt.Errorf("source still exists")
 	}
-	return os.Remove(to)
+	return removeWithRetry(to)
 }
 
 func checkReadDir(dir string) error {

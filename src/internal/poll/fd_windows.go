@@ -45,22 +45,12 @@ var ifsHandlesOnly = sync.OnceValue(func() bool {
 	return true
 })
 
-// truncatedRecvSkipsCompletion reports whether this kernel skips the completion
-// packet for a receive that goes pending and then truncates, which Windows 7
-// does although FILE_SKIP_COMPLETION_PORT_ON_SUCCESS permits skipping only for
-// an operation that completed synchronously. This is a version check because
-// the behaviour can only be observed by waiting out a packet that never comes.
+// truncatedRecvSkipsCompletion reports whether a pending receive that then
+// truncates posts no completion, as on Windows 7.
 var truncatedRecvSkipsCompletion = sync.OnceValue(func() bool {
-	major, minor, _ := windows.Version()
-	return major < 6 || (major == 6 && minor < 2)
+	major, minor, _ := windows.KernelVersion()
+	return major == 6 && minor < 2
 })
-
-// isStreamSocket reports whether h is a stream socket, on which a receive
-// cannot truncate, because a short read there is an ordinary success.
-func isStreamSocket(h syscall.Handle) bool {
-	typ, err := syscall.GetsockoptInt(h, syscall.SOL_SOCKET, windows.SO_TYPE)
-	return err == nil && typ == syscall.SOCK_STREAM
-}
 
 // canSkipCompletionPortOnSuccess returns true if we use FILE_SKIP_COMPLETION_PORT_ON_SUCCESS for the given handle.
 // See https://support.microsoft.com/kb/2568167 for details.
@@ -68,10 +58,6 @@ func canSkipCompletionPortOnSuccess(h syscall.Handle, isSocket bool) bool {
 	if !isSocket {
 		// Non-socket handles can use SetFileCompletionNotificationModes without problems.
 		return true
-	}
-	if truncatedRecvSkipsCompletion() && !isStreamSocket(h) {
-		// See the comment on truncatedRecvSkipsCompletion.
-		return false
 	}
 	if ifsHandlesOnly() {
 		// If the system only has IFS handles for TCP sockets, then there is nothing else to check.
@@ -249,9 +235,11 @@ var operationPool = sync.Pool{
 // handling cancellation if necessary.
 func (fd *FD) waitIO(o *operation) error {
 	if o.o.HEvent != 0 {
-		// The overlapped handle is not added to the runtime poller, so the
-		// operation reports itself through the event in its OVERLAPPED, and
-		// the deadline, where fd keeps one, is applied here.
+		// The overlapped handle is not added to the runtime poller,
+		// the only way to wait for the IO to complete is block until
+		// the overlapped event is signaled.
+		//
+		// waitEventIO bounds the wait by fd's own deadline.
 		return fd.waitEventIO(o)
 	}
 	// Wait for our request to complete.
@@ -265,6 +253,7 @@ func (fd *FD) waitIO(o *operation) error {
 		// between the time wait returned and CancelIoEx was executed.
 		if err := syscall.CancelIoEx(fd.Sysfd, &o.o); err != nil && err != syscall.ERROR_NOT_FOUND {
 			if hasCancelIoEx() {
+				// TODO(brainman): maybe do something else, but panic.
 				panic(err)
 			}
 		}
@@ -290,7 +279,7 @@ func (fd *FD) execIO(
 	if err != nil {
 		return 0, err
 	}
-	if fd.keepsOwnDeadlines() {
+	if fd.ownDeadlines {
 		if _, passed := fd.deadlineTimeout(mode); passed {
 			return 0, ErrDeadlineExceeded
 		}
@@ -320,25 +309,35 @@ func (fd *FD) execIO(
 			// If the handle is opened for overlapped IO but we can't
 			// use the runtime poller, then we need to use an
 			// event to wait for the IO to complete.
-			h, err := windows.CreateEvent(nil, 0, 0, nil)
+			h, err := fd.ioEvent(mode)
 			if err != nil {
 				// This shouldn't happen when all CreateEvent arguments are zero.
 				panic(err)
 			}
 			// Set the low bit so that the external IOCP doesn't receive the completion packet.
 			o.o.HEvent = h | 1
-			defer syscall.CloseHandle(h)
+			if canDetachFromIOCP() {
+				defer syscall.CloseHandle(h)
+			}
 		}
 	}
 	if !hasCancelIoEx() && !fd.associated && !fd.isBlocking {
+		// CancelIo only cancels I/O issued by the calling thread, so
+		// keep the whole operation on one thread where the kernel has
+		// no CancelIoEx.
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 	}
+	// Start IO.
 	qty, err := submit(o)
 	var waitErr error
 	// Blocking operations shouldn't return ERROR_IO_PENDING.
 	// Continue without waiting if that happens.
-	if !fd.isBlocking && (err == syscall.ERROR_IO_PENDING || (err == nil && fd.waitOnSuccess)) {
+	//
+	// Where the kernel cannot detach, an operation driven by an event that
+	// completes at once posts no packet (its event handle has the low bit
+	// set) and is not waited for.
+	if !fd.isBlocking && (err == syscall.ERROR_IO_PENDING || (err == nil && fd.waitOnSuccess && (fd.associated || canDetachFromIOCP()))) {
 		// IO started asynchronously or completed synchronously but
 		// a sync notification is required. Wait for it to complete.
 		waitErr = fd.waitIO(o)
@@ -399,15 +398,16 @@ type FD struct {
 	// Semaphore signaled when file is closed.
 	csema uint32
 
-	// Deadlines for a handle the runtime poller does not own, which on a
-	// kernel that cannot take a handle back off a completion port is every
-	// handle but a socket. They hold the runtime clock reading a deadline
-	// falls on, or zero for none, and the events wake whatever is waiting
-	// when one moves. The handles are zero when the poller owns fd.
+	// Deadlines kept here for a handle off the poller, as runtime clock
+	// readings, zero for none. Each event wakes a wait when its deadline
+	// moves.
+	ownDeadlines       bool
 	readDeadline       atomic.Int64
 	writeDeadline      atomic.Int64
-	readDeadlineEvent  syscall.Handle
-	writeDeadlineEvent syscall.Handle
+	readDeadlineEvent  atomic.Uintptr
+	writeDeadlineEvent atomic.Uintptr
+	readEvent          syscall.Handle
+	writeEvent         syscall.Handle
 
 	// Don't wait from completion port notifications for successful
 	// operations that complete synchronously.
@@ -420,6 +420,10 @@ type FD struct {
 	// Whether a zero byte read indicates EOF. This is false for a
 	// message based socket connection.
 	ZeroReadIsEOF bool
+
+	// KeepFileCompletionModes prevents Init from changing the file object's
+	// completion notification modes.
+	KeepFileCompletionModes bool
 
 	// Whether the handle is owned by os.File.
 	isFile bool
@@ -506,72 +510,122 @@ func (fd *FD) Init(net string, pollable bool) error {
 	// behavior below, as it requires an extra syscall.
 	fd.waitOnSuccess = true
 
-	if !hasCancelIoEx() || (fd.kind != kindNet && !canDetachFromIOCP()) {
-		if err := fd.initDeadlineEvents(); err != nil {
-			return err
-		}
-	} else {
-		err := fd.pd.init(fd)
-		if err != nil {
-			if err != windows.ERROR_INVALID_PARAMETER || canDetachFromIOCP() {
-				return err
-			}
+	// A handle kept off the poller (see below) never waits after an
+	// operation that completes at once, so its modes are neither read nor
+	// set.
+	if fd.KeepFileCompletionModes && (fd.kind == kindNet || canDetachFromIOCP()) {
+		// Query the existing skip-success mode so we don't wait for a
+		// suppressed completion or skip waiting for an expected one.
+		var info windows.FILE_IO_COMPLETION_NOTIFICATION_INFORMATION
+		if err := windows.NtQueryInformationFile(fd.Sysfd, &windows.IO_STATUS_BLOCK{},
+			unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), windows.FileIoCompletionNotificationInformation); err != nil {
+			// Without knowing the modes, neither waiting for a completion
+			// packet on success nor skipping it is safe. Leave the handle
+			// unassociated and use explicit events for pending I/O instead.
+			// Inline success needs no wait, and deadlines are unavailable.
+			fd.waitOnSuccess = false
 			return nil
 		}
-		fd.associated = true
+		fd.waitOnSuccess = info.Flags&syscall.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS == 0
 	}
 
-	// FILE_SKIP_SET_EVENT_ON_HANDLE is always safe to use. We don't use that feature
-	// and it adds some overhead to the Windows I/O manager.
-	// See https://devblogs.microsoft.com/oldnewthing/20200221-00/?p=103466.
-	modes := uint8(syscall.FILE_SKIP_SET_EVENT_ON_HANDLE)
-	if canSkipCompletionPortOnSuccess(fd.Sysfd, fd.kind == kindNet) {
-		modes |= syscall.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+	if !hasCancelIoEx() || (fd.kind != kindNet && !canDetachFromIOCP()) {
+		// The kernel cannot detach, or has no CancelIoEx to end a wait
+		// the poller cannot see, so keep every handle off the port and
+		// drive it with events. The
+		// modes belong to the file object and are left alone.
+		fd.ownDeadlines = true
+		fd.waitOnSuccess = false
+		return nil
 	}
-	if syscall.SetFileCompletionNotificationModes(fd.Sysfd, modes) == nil {
-		if modes&syscall.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS != 0 {
-			fd.waitOnSuccess = false
+
+	// It is safe to add overlapped handles that also perform I/O
+	// outside of the runtime poller. The runtime poller will ignore
+	// I/O completion notifications not initiated by us.
+	err := fd.pd.init(fd)
+	if err != nil {
+		if err != windows.ERROR_INVALID_PARAMETER || canDetachFromIOCP() {
+			return err
+		}
+		// This kernel cannot take the socket off its port. Leave it
+		// there and drive it with an event.
+		return nil
+	}
+	fd.associated = true
+
+	if !fd.KeepFileCompletionModes {
+		// FILE_SKIP_SET_EVENT_ON_HANDLE is always safe to use. We don't use that feature
+		// and it adds some overhead to the Windows I/O manager.
+		// See https://devblogs.microsoft.com/oldnewthing/20200221-00/?p=103466.
+		modes := uint8(syscall.FILE_SKIP_SET_EVENT_ON_HANDLE)
+		// It's not safe to skip completion notifications for UDP:
+		// https://docs.microsoft.com/en-us/archive/blogs/winserverperformance/designing-applications-for-high-performance-part-iii
+		if !(fd.kind == kindNet && !fd.IsStream && truncatedRecvSkipsCompletion()) &&
+			canSkipCompletionPortOnSuccess(fd.Sysfd, fd.kind == kindNet) {
+			modes |= syscall.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+		}
+		if syscall.SetFileCompletionNotificationModes(fd.Sysfd, modes) == nil {
+			if modes&syscall.FILE_SKIP_COMPLETION_PORT_ON_SUCCESS != 0 {
+				fd.waitOnSuccess = false
+			}
 		}
 	}
 	return nil
 }
 
-// initDeadlineEvents readies fd for being driven by events, one for each
-// direction, which SetDeadline signals so that a wait already under way works
-// out its new timeout. They are auto-reset, and a signal that finds nobody
-// waiting only costs the next wait one turn around its loop.
-func (fd *FD) initDeadlineEvents() error {
-	r, err := windows.CreateEvent(nil, 0, 0, nil)
-	if err != nil {
-		return err
+// ioEvent returns the event an operation in direction mode reports through.
+// Where the kernel can detach it is made per operation, as upstream does.
+// Elsewhere one per direction serves the handle's life: the kernel resets
+// it as each operation starts, and fd's lock serialises them.
+func (fd *FD) ioEvent(mode int) (syscall.Handle, error) {
+	if canDetachFromIOCP() {
+		return windows.CreateEvent(nil, 0, 0, nil)
 	}
-	w, err := windows.CreateEvent(nil, 0, 0, nil)
-	if err != nil {
-		syscall.CloseHandle(r)
-		return err
+	ev := &fd.readEvent
+	if mode == 'w' {
+		ev = &fd.writeEvent
 	}
-	fd.readDeadlineEvent, fd.writeDeadlineEvent = r, w
-	return nil
+	if *ev == 0 {
+		h, err := windows.CreateEvent(nil, 0, 0, nil)
+		if err != nil {
+			return 0, err
+		}
+		*ev = h
+	}
+	return *ev, nil
 }
 
-// keepsOwnDeadlines reports whether fd holds its own deadlines, which it does
-// when the runtime poller does not own it. See canDetachFromIOCP.
-func (fd *FD) keepsOwnDeadlines() bool {
-	return fd.readDeadlineEvent != 0
+// deadlineEvent returns the event that wakes a wait in direction mode when
+// its deadline moves, made on the first wait. It is published before the
+// wait reads the deadline, and SetDeadline signals only a published event,
+// so each side sees the other's.
+func (fd *FD) deadlineEvent(mode int) (syscall.Handle, error) {
+	ev := &fd.readDeadlineEvent
+	if mode == 'w' {
+		ev = &fd.writeDeadlineEvent
+	}
+	if h := ev.Load(); h != 0 {
+		return syscall.Handle(h), nil
+	}
+	h, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		return 0, err
+	}
+	ev.Store(uintptr(h))
+	return h, nil
 }
 
-// offPoller reports whether fd does overlapped I/O that the runtime poller
-// does not own, a file kept off the completion port or a socket the poller
-// could not adopt. Only CancelIoEx can end a wait on such a handle.
+// offPoller reports whether fd does overlapped I/O outside the poller on a
+// kernel that cannot detach, where only CancelIoEx ends a wait.
 func (fd *FD) offPoller() bool {
-	return !fd.isBlocking && fd.pd.runtimeCtx == 0
+	return !fd.isBlocking && fd.pd.runtimeCtx == 0 && !canDetachFromIOCP()
 }
 
-// setDeadlineNoPoller records a deadline for a handle the poller does not own.
-// d is the time until the deadline, zero for none and negative for one that
-// has already passed, as setDeadlineImpl works it out.
+// setDeadlineNoPoller records a deadline for a handle off the poller. d is the
+// timeout setDeadlineImpl computes, zero for none and negative if already
+// passed.
 func (fd *FD) setDeadlineNoPoller(d int64, mode int) error {
-	if !fd.keepsOwnDeadlines() {
+	if !fd.ownDeadlines {
 		return ErrNoDeadline
 	}
 	deadline := int64(0)
@@ -580,21 +634,23 @@ func (fd *FD) setDeadlineNoPoller(d int64, mode int) error {
 	}
 	if mode == 'r' || mode == 'r'+'w' {
 		fd.readDeadline.Store(deadline)
-		// Wake a wait that is already under way, so that it applies this
-		// deadline rather than the one it started with, since the
-		// promise on SetDeadline covers pending I/O, not only what
-		// follows it.
-		windows.SetEvent(fd.readDeadlineEvent)
+		// Wake a wait already under way, since SetDeadline covers pending
+		// I/O. A wait with no event yet has not read the deadline either.
+		if ev := fd.readDeadlineEvent.Load(); ev != 0 {
+			windows.SetEvent(syscall.Handle(ev))
+		}
 	}
 	if mode == 'w' || mode == 'r'+'w' {
 		fd.writeDeadline.Store(deadline)
-		windows.SetEvent(fd.writeDeadlineEvent)
+		if ev := fd.writeDeadlineEvent.Load(); ev != 0 {
+			windows.SetEvent(syscall.Handle(ev))
+		}
 	}
 	return nil
 }
 
-// deadlineTimeout returns how long an operation in the given direction may
-// wait, in milliseconds, and whether its deadline has already passed.
+// deadlineTimeout returns the wait in milliseconds for direction mode, and
+// whether its deadline has passed.
 func (fd *FD) deadlineTimeout(mode int) (uint32, bool) {
 	deadline := fd.readDeadline.Load()
 	if mode == 'w' {
@@ -614,20 +670,25 @@ func (fd *FD) deadlineTimeout(mode int) (uint32, bool) {
 	return uint32(ms), false
 }
 
-// waitEventIO waits for o on a handle the poller does not own. The wait ends
-// when the operation completes, when the deadline for its direction passes,
-// or when that deadline moves and has to be worked out again.
+// waitEventIO waits for o on a handle off the poller until it completes, its
+// deadline passes, or the deadline moves.
 func (fd *FD) waitEventIO(o *operation) error {
 	mode := int(o.mode)
-	deadlineEvent := fd.readDeadlineEvent
-	if mode == 'w' {
-		deadlineEvent = fd.writeDeadlineEvent
-	}
-	if deadlineEvent == 0 {
-		// A handle DisassociateIOCP took off the port, which keeps no
-		// deadline of its own. Only the operation can end this wait.
+	if !fd.ownDeadlines {
+		// DisassociateIOCP's handles keep no deadline. Where the
+		// kernel cannot detach, a failed wait cancels the operation
+		// first.
 		_, err := syscall.WaitForSingleObject(o.o.HEvent, syscall.INFINITE)
+		if err != nil && !canDetachFromIOCP() {
+			return fd.cancelEventIO(o, err)
+		}
 		return err
+	}
+	deadlineEvent, err := fd.deadlineEvent(mode)
+	if err != nil {
+		// No event, so no deadline could end the wait. Stop the
+		// operation.
+		return fd.cancelEventIO(o, err)
 	}
 	handles := [2]syscall.Handle{o.o.HEvent, deadlineEvent}
 	for {
@@ -638,7 +699,7 @@ func (fd *FD) waitEventIO(o *operation) error {
 		s, err := windows.WaitForMultipleObjects(2, &handles[0], false, timeout)
 		switch {
 		case err != nil:
-			return err
+			return fd.cancelEventIO(o, err)
 		case s == syscall.WAIT_OBJECT_0:
 			return nil
 		case s == syscall.WAIT_OBJECT_0+1:
@@ -649,12 +710,12 @@ func (fd *FD) waitEventIO(o *operation) error {
 	}
 }
 
-// cancelEventIO stops o and waits for the kernel to be done with it, so that
-// its buffers and OVERLAPPED are free by the time execIO returns, and reports
-// why it was stopped.
+// cancelEventIO stops o and waits until the kernel is done with it, so that
+// its buffers are free when execIO returns. It returns why.
 func (fd *FD) cancelEventIO(o *operation, why error) error {
 	if err := syscall.CancelIoEx(fd.Sysfd, &o.o); err != nil && err != syscall.ERROR_NOT_FOUND {
 		if hasCancelIoEx() {
+			// TODO(brainman): maybe do something else, but panic.
 			panic(err)
 		}
 	}
@@ -662,11 +723,9 @@ func (fd *FD) cancelEventIO(o *operation, why error) error {
 	return why
 }
 
-// canDetachFromIOCP reports whether this kernel implements
-// FileReplaceCompletionInformation, the only way to take a handle back off a
-// completion port. Windows 8.1 added it. A handle that cannot be taken off
-// must never be put on one, or os.(*File).Fd cannot keep its promise to hand
-// back a detached handle, so Init keeps all but sockets off the poller here.
+// canDetachFromIOCP reports whether the kernel has
+// FileReplaceCompletionInformation (from Windows 8.1), the only way to take a
+// handle off a completion port.
 func canDetachFromIOCP() bool {
 	if TestDisassociateIOCPUnsupported {
 		return false
@@ -674,36 +733,13 @@ func canDetachFromIOCP() bool {
 	return detachFromIOCPSupported()
 }
 
-// detachFromIOCPSupported probes once, using a handle to the null device.
-// Probing with a caller's handle would strand it, since a handle that turns
-// out not to be detachable stays on the port the probe put it on.
 var detachFromIOCPSupported = sync.OnceValue(func() bool {
-	nul, err := syscall.UTF16PtrFromString("NUL")
-	if err != nil {
-		return true
-	}
-	h, err := syscall.CreateFile(nul, syscall.GENERIC_READ|syscall.GENERIC_WRITE,
-		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING,
-		syscall.FILE_FLAG_OVERLAPPED, 0)
-	if err != nil {
-		// No handle to probe with. Assume the kernel can detach, which
-		// is what this package assumed before it probed at all.
-		return true
-	}
-	defer syscall.CloseHandle(h)
-	port, err := windows.CreateIoCompletionPort(h, 0, 0, 0)
-	if err != nil {
-		return true
-	}
-	defer syscall.CloseHandle(port)
-	info := windows.FILE_COMPLETION_INFORMATION{}
-	return windows.NtSetInformationFile(h, &windows.IO_STATUS_BLOCK{}, unsafe.Pointer(&info),
-		uint32(unsafe.Sizeof(info)), windows.FileReplaceCompletionInformation) == nil
+	major, minor, _ := windows.KernelVersion()
+	return major > 6 || (major == 6 && minor >= 3)
 })
 
-// FilesUsePoller reports whether the runtime poller owns handles other than
-// sockets. It does not where the kernel cannot take a handle back off a
-// completion port. See canDetachFromIOCP. Only tests need to ask.
+// FilesUsePoller reports whether the poller owns handles other than sockets.
+// Only tests ask.
 func FilesUsePoller() bool {
 	return canDetachFromIOCP()
 }
@@ -735,8 +771,8 @@ func (fd *FD) DisassociateIOCP() error {
 	}
 
 	if !canDetachFromIOCP() {
-		// The handle cannot come off the port. Count it as off all the
-		// same, so that I/O on it is driven with an event from here on.
+		// It cannot come off the port. Count it as off, so that its
+		// I/O is driven with an event from here on.
 		fd.associated = false
 		return nil
 	}
@@ -768,10 +804,19 @@ func (fd *FD) destroy() error {
 		err = syscall.CloseHandle(fd.Sysfd)
 	}
 	fd.Sysfd = syscall.InvalidHandle
-	if fd.readDeadlineEvent != 0 {
-		syscall.CloseHandle(fd.readDeadlineEvent)
-		syscall.CloseHandle(fd.writeDeadlineEvent)
-		fd.readDeadlineEvent, fd.writeDeadlineEvent = 0, 0
+	if ev := fd.readDeadlineEvent.Swap(0); ev != 0 {
+		syscall.CloseHandle(syscall.Handle(ev))
+	}
+	if ev := fd.writeDeadlineEvent.Swap(0); ev != 0 {
+		syscall.CloseHandle(syscall.Handle(ev))
+	}
+	if fd.readEvent != 0 {
+		syscall.CloseHandle(fd.readEvent)
+		fd.readEvent = 0
+	}
+	if fd.writeEvent != 0 {
+		syscall.CloseHandle(fd.writeEvent)
+		fd.writeEvent = 0
 	}
 	runtime_Semrelease(&fd.csema)
 	return err
@@ -785,10 +830,7 @@ func (fd *FD) Close() error {
 	}
 
 	if fd.kind == kindPipe || fd.offPoller() {
-		// Interrupt whatever is waiting. The poller is not watching this
-		// handle, so nothing else would end a wait before the handle
-		// closed, and the handle cannot close until the operation holding
-		// it lets go.
+		// Nothing else ends a wait on a handle the poller does not watch.
 		syscall.CancelIoEx(fd.Sysfd, nil)
 	}
 	// unblock pending reader and writer
@@ -1348,13 +1390,98 @@ func (fd *FD) ConnectEx(ra syscall.Sockaddr) error {
 	return err
 }
 
+// acceptCompletionNeedsThread reports whether the kernel holds an AcceptEx
+// completion while the posting thread is in a synchronous call, as Windows 8
+// does.
+var acceptCompletionNeedsThread = sync.OnceValue(func() bool {
+	major, minor, _ := windows.KernelVersion()
+	return major == 6 && minor == 2
+})
+
+// TestUseAcceptThread should only be used for testing purposes.
+// When set, AcceptEx is posted from the accept thread on every kernel.
+var TestUseAcceptThread bool
+
+// The accept thread is the one thread of a private pool. It enters Go only to
+// post, so it never blocks in a synchronous call, and the pool keeps it alive,
+// since an exiting thread cancels its I/O. The caller waits on an event, which
+// the deadlock check counts as running.
+var (
+	acceptThreadMu    sync.Mutex // one post at a time
+	acceptThreadOnce  sync.Once
+	acceptThreadWork  uintptr        // the pool work object, which runs acceptThreadPost
+	acceptThreadDone  syscall.Handle // signalled by the accept thread after each post
+	acceptThreadErr   error          // why there is no accept thread, if there is none
+	acceptThreadPost  atomic.Pointer[func()]
+	acceptThreadPosts atomic.Uint64
+)
+
+func startAcceptThread() {
+	pool, err := windows.CreateThreadpool(0)
+	if err != nil {
+		acceptThreadErr = err
+		return
+	}
+	// Exactly one thread, never retired, so every post comes from it.
+	if err := windows.SetThreadpoolThreadMinimum(pool, 1); err != nil {
+		acceptThreadErr = err
+		return
+	}
+	windows.SetThreadpoolThreadMaximum(pool, 1)
+	acceptThreadDone, err = windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		acceptThreadErr = err
+		return
+	}
+	env := windows.TP_CALLBACK_ENVIRON{
+		Version:          windows.TP_CALLBACK_ENVIRON_VERSION,
+		Pool:             pool,
+		CallbackPriority: windows.TP_CALLBACK_PRIORITY_NORMAL,
+	}
+	env.Size = uint32(unsafe.Sizeof(env))
+	acceptThreadWork, acceptThreadErr = windows.CreateThreadpoolWork(syscall.NewCallback(acceptThreadCallback), 0, &env)
+}
+
+func acceptThreadCallback(instance, context, work uintptr) uintptr {
+	(*acceptThreadPost.Load())()
+	acceptThreadPosts.Add(1)
+	windows.SetEvent(acceptThreadDone)
+	return 0
+}
+
+// postFromAcceptThread runs post on the accept thread, where there is one, and
+// waits for it.
+func postFromAcceptThread(post func()) {
+	acceptThreadMu.Lock()
+	defer acceptThreadMu.Unlock()
+	acceptThreadOnce.Do(startAcceptThread)
+	if acceptThreadErr != nil {
+		post()
+		return
+	}
+	acceptThreadPost.Store(&post)
+	windows.SubmitThreadpoolWork(acceptThreadWork)
+	syscall.WaitForSingleObject(acceptThreadDone, syscall.INFINITE)
+	// The count is what orders the post's results before this read of them.
+	acceptThreadPosts.Load()
+	acceptThreadPost.Store(nil)
+}
+
 func (fd *FD) acceptOne(s syscall.Handle, rawsa []syscall.RawSockaddrAny) (string, error) {
 	// Submit accept request.
 	rsan := uint32(unsafe.Sizeof(rawsa[0]))
 	_, err := fd.execIO('r', func(o *operation) (qty uint32, err error) {
-		err = AcceptFunc(fd.Sysfd, s, (*byte)(unsafe.Pointer(&rawsa[0])), 0, rsan, rsan, &qty, &o.o)
-		return qty, err
-
+		if !TestUseAcceptThread && !acceptCompletionNeedsThread() {
+			err = AcceptFunc(fd.Sysfd, s, (*byte)(unsafe.Pointer(&rawsa[0])), 0, rsan, rsan, &qty, &o.o)
+			return qty, err
+		}
+		// Only the closure and its results escape, and only on this path.
+		var tqty uint32
+		var terr error
+		postFromAcceptThread(func() {
+			terr = AcceptFunc(fd.Sysfd, s, (*byte)(unsafe.Pointer(&rawsa[0])), 0, rsan, rsan, &tqty, &o.o)
+		})
+		return tqty, terr
 	})
 	if err != nil {
 		CloseFunc(s)

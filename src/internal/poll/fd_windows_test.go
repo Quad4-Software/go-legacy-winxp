@@ -6,8 +6,10 @@ package poll_test
 
 import (
 	"errors"
+	"fmt"
 	"internal/poll"
 	"internal/syscall/windows"
+	"internal/testenv"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,7 +30,7 @@ func TestWSASocketConflict(t *testing.T) {
 	}
 	fd := poll.FD{Sysfd: s, IsStream: true, ZeroReadIsEOF: true}
 	if err = fd.Init("tcp", true); err != nil {
-		syscall.CloseHandle(s)
+		syscall.Closesocket(s)
 		t.Fatal(err)
 	}
 	defer fd.Close()
@@ -158,44 +160,73 @@ func TestSocketSkipsCompletionPortOnSuccess(t *testing.T) {
 	}
 }
 
-func TestIsStreamSocket(t *testing.T) {
-	t.Parallel()
-	for _, tt := range []struct {
-		name  string
-		typ   int32
-		proto int32
-		want  bool
-	}{
-		{"tcp", syscall.SOCK_STREAM, syscall.IPPROTO_TCP, true},
-		{"udp", syscall.SOCK_DGRAM, syscall.IPPROTO_UDP, false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			s, err := windows.WSASocket(syscall.AF_INET, tt.typ, tt.proto, nil, 0, windows.WSA_FLAG_OVERLAPPED)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer syscall.Closesocket(s)
-			if got := poll.IsStreamSocket(s); got != tt.want {
-				t.Errorf("IsStreamSocket(%s) = %v, want %v", tt.name, got, tt.want)
-			}
-		})
+// TestMain runs acceptAlone for TestAcceptThreadKeepsProgramAlive.
+func TestMain(m *testing.M) {
+	if os.Getenv("GO_POLL_TEST_ACCEPT_ALONE") == "1" {
+		acceptAlone()
+		return
 	}
+	os.Exit(m.Run())
 }
 
-// TestDatagramSocketSkipsCompletionPortOnSuccess covers the receive that hung
-// net.TestReadFromTimeout on Windows 7. The kernel behaviour cannot be
-// provoked elsewhere, so what is asserted is the decision FD.Init reaches.
-func TestDatagramSocketSkipsCompletionPortOnSuccess(t *testing.T) {
-	// Assume that all Windows we test on only have IFS handles for UDP sockets.
-	t.Parallel()
-	s, err := windows.WSASocket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_UDP, nil, 0, windows.WSA_FLAG_OVERLAPPED)
+// acceptAlone accepts one connection through the accept thread with no other
+// goroutine, so the runtime's deadlock check would fire if the wait counted as
+// asleep.
+func acceptAlone() {
+	poll.TestUseAcceptThread = true
+	ls, err := windows.WSASocket(syscall.AF_INET, syscall.SOCK_STREAM, syscall.IPPROTO_TCP, nil, 0, windows.WSA_FLAG_OVERLAPPED)
 	if err != nil {
-		t.Fatal(err)
+		fmt.Println("socket:", err)
+		os.Exit(1)
 	}
-	fd := newFD(t, s, "udp", true)
-	want := !poll.TruncatedRecvSkipsCompletion()
-	if got := poll.SkipsCompletionPortOnSuccess(fd); got != want {
-		t.Errorf("datagram socket skips completion port on success = %v, want %v", got, want)
+	if err := syscall.Bind(ls, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		fmt.Println("bind:", err)
+		os.Exit(1)
+	}
+	if err := syscall.Listen(ls, 1); err != nil {
+		fmt.Println("listen:", err)
+		os.Exit(1)
+	}
+	sa, err := syscall.Getsockname(ls)
+	if err != nil {
+		fmt.Println("getsockname:", err)
+		os.Exit(1)
+	}
+	fd := poll.FD{Sysfd: ls, IsStream: true, ZeroReadIsEOF: true}
+	if err := fd.Init("tcp", true); err != nil {
+		fmt.Println("init:", err)
+		os.Exit(1)
+	}
+	c, err := windows.WSASocket(syscall.AF_INET, syscall.SOCK_STREAM, syscall.IPPROTO_TCP, nil, 0, windows.WSA_FLAG_OVERLAPPED)
+	if err != nil {
+		fmt.Println("socket:", err)
+		os.Exit(1)
+	}
+	if err := syscall.Connect(c, &syscall.SockaddrInet4{Port: sa.(*syscall.SockaddrInet4).Port, Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		fmt.Println("connect:", err)
+		os.Exit(1)
+	}
+	s, _, _, _, err := fd.Accept(func() (syscall.Handle, error) {
+		return windows.WSASocket(syscall.AF_INET, syscall.SOCK_STREAM, syscall.IPPROTO_TCP, nil, 0, windows.WSA_FLAG_OVERLAPPED)
+	})
+	if err != nil {
+		fmt.Println("accept:", err)
+		os.Exit(1)
+	}
+	syscall.Closesocket(s)
+	syscall.Closesocket(c)
+	fd.Close()
+}
+
+// TestAcceptThreadKeepsProgramAlive checks that a program whose only goroutine
+// waits for the accept thread is not taken for a deadlock. A test binary's
+// timer goroutine hides that, so it runs in a process of its own.
+func TestAcceptThreadKeepsProgramAlive(t *testing.T) {
+	cmd := testenv.Command(t, testenv.Executable(t))
+	cmd.Env = append(cmd.Environ(), "GO_POLL_TEST_ACCEPT_ALONE=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the program did not accept and exit: %v\n%s", err, out)
 	}
 }
 

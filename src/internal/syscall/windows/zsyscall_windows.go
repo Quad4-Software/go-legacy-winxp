@@ -71,6 +71,8 @@ var (
 	procCreateEventW                      = modkernel32.NewProc("CreateEventW")
 	procCreateIoCompletionPort            = modkernel32.NewProc("CreateIoCompletionPort")
 	procCreateNamedPipeW                  = modkernel32.NewProc("CreateNamedPipeW")
+	procCreateThreadpool                  = modkernel32.NewProc("CreateThreadpool")
+	procCreateThreadpoolWork              = modkernel32.NewProc("CreateThreadpoolWork")
 	procGetACP                            = modkernel32.NewProc("GetACP")
 	procGetComputerNameExW                = modkernel32.NewProc("GetComputerNameExW")
 	procGetConsoleCP                      = modkernel32.NewProc("GetConsoleCP")
@@ -95,6 +97,10 @@ var (
 	procRtlVirtualUnwind                  = modkernel32.NewProc("RtlVirtualUnwind")
 	procSetEvent                          = modkernel32.NewProc("SetEvent")
 	procSetFileInformationByHandle        = modkernel32.NewProc("SetFileInformationByHandle")
+	procSetThreadpoolThreadMaximum        = modkernel32.NewProc("SetThreadpoolThreadMaximum")
+	procSetThreadpoolThreadMinimum        = modkernel32.NewProc("SetThreadpoolThreadMinimum")
+	procSleep                             = modkernel32.NewProc("Sleep")
+	procSubmitThreadpoolWork              = modkernel32.NewProc("SubmitThreadpoolWork")
 	procUnlockFileEx                      = modkernel32.NewProc("UnlockFileEx")
 	procVirtualQuery                      = modkernel32.NewProc("VirtualQuery")
 	procWaitForMultipleObjects            = modkernel32.NewProc("WaitForMultipleObjects")
@@ -108,6 +114,9 @@ var (
 	procNtQueryDirectoryFile              = modntdll.NewProc("NtQueryDirectoryFile")
 	procNtQueryInformationFile            = modntdll.NewProc("NtQueryInformationFile")
 	procNtSetInformationFile              = modntdll.NewProc("NtSetInformationFile")
+	procRtlDosPathNameToNtPathName_U      = modntdll.NewProc("RtlDosPathNameToNtPathName_U")
+	procRtlFreeUnicodeString              = modntdll.NewProc("RtlFreeUnicodeString")
+	procRtlGetNtVersionNumbers            = modntdll.NewProc("RtlGetNtVersionNumbers")
 	procRtlGetVersion                     = modntdll.NewProc("RtlGetVersion")
 	procRtlIsDosDeviceName_U              = modntdll.NewProc("RtlIsDosDeviceName_U")
 	procRtlNtStatusToDosErrorNoTeb        = modntdll.NewProc("RtlNtStatusToDosErrorNoTeb")
@@ -276,24 +285,24 @@ func SetTokenInformation(tokenHandle syscall.Token, tokenInformationClass uint32
 	return
 }
 
-func ProcessPrng(buf []byte) (err error) {
-	var _p0 *byte
-	if len(buf) > 0 {
-		_p0 = &buf[0]
-	}
-	r1, _, e1 := syscall.SyscallN(procProcessPrng.Addr(), uintptr(unsafe.Pointer(_p0)), uintptr(len(buf)))
-	if r1 == 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
 func RtlGenRandom(buf []byte) (err error) {
 	var _p0 *byte
 	if len(buf) > 0 {
 		_p0 = &buf[0]
 	}
 	r1, _, e1 := syscall.SyscallN(procSystemFunction036.Addr(), uintptr(unsafe.Pointer(_p0)), uintptr(len(buf)))
+	if r1 == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func ProcessPrng(buf []byte) (err error) {
+	var _p0 *byte
+	if len(buf) > 0 {
+		_p0 = &buf[0]
+	}
+	r1, _, e1 := syscall.SyscallN(procProcessPrng.Addr(), uintptr(unsafe.Pointer(_p0)), uintptr(len(buf)))
 	if r1 == 0 {
 		err = errnoErr(e1)
 	}
@@ -330,6 +339,24 @@ func CreateNamedPipe(name *uint16, flags uint32, pipeMode uint32, maxInstances u
 	r0, _, e1 := syscall.SyscallN(procCreateNamedPipeW.Addr(), uintptr(unsafe.Pointer(name)), uintptr(flags), uintptr(pipeMode), uintptr(maxInstances), uintptr(outSize), uintptr(inSize), uintptr(defaultTimeout), uintptr(unsafe.Pointer(sa)))
 	handle = syscall.Handle(r0)
 	if handle == syscall.InvalidHandle {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func CreateThreadpool(reserved uintptr) (pool uintptr, err error) {
+	r0, _, e1 := syscall.SyscallN(procCreateThreadpool.Addr(), uintptr(reserved))
+	pool = uintptr(r0)
+	if pool == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func CreateThreadpoolWork(callback uintptr, context uintptr, env *TP_CALLBACK_ENVIRON) (work uintptr, err error) {
+	r0, _, e1 := syscall.SyscallN(procCreateThreadpoolWork.Addr(), uintptr(callback), uintptr(context), uintptr(unsafe.Pointer(env)))
+	work = uintptr(r0)
+	if work == 0 {
 		err = errnoErr(e1)
 	}
 	return
@@ -650,6 +677,29 @@ func ntSetFileEndOfFileInfo(handle syscall.Handle, buf unsafe.Pointer) error {
 	return nil
 }
 
+func SetThreadpoolThreadMaximum(pool uintptr, max uint32) {
+	syscall.SyscallN(procSetThreadpoolThreadMaximum.Addr(), uintptr(pool), uintptr(max))
+	return
+}
+
+func SetThreadpoolThreadMinimum(pool uintptr, min uint32) (err error) {
+	r1, _, e1 := syscall.SyscallN(procSetThreadpoolThreadMinimum.Addr(), uintptr(pool), uintptr(min))
+	if r1 == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func Sleep(milliseconds uint32) {
+	syscall.SyscallN(procSleep.Addr(), uintptr(milliseconds))
+	return
+}
+
+func SubmitThreadpoolWork(work uintptr) {
+	syscall.SyscallN(procSubmitThreadpoolWork.Addr(), uintptr(work))
+	return
+}
+
 func UnlockFileEx(file syscall.Handle, reserved uint32, bytesLow uint32, bytesHigh uint32, overlapped *syscall.Overlapped) (err error) {
 	r1, _, e1 := syscall.SyscallN(procUnlockFileEx.Addr(), uintptr(file), uintptr(reserved), uintptr(bytesLow), uintptr(bytesHigh), uintptr(unsafe.Pointer(overlapped)))
 	if r1 == 0 {
@@ -748,6 +798,22 @@ func NtSetInformationFile(handle syscall.Handle, iosb *IO_STATUS_BLOCK, inBuffer
 	if r0 != 0 {
 		ntstatus = NTStatus(r0)
 	}
+	return
+}
+
+func RtlDosPathNameToNtPathName_U(dosName *uint16, ntName *NTUnicodeString, filePart **uint16, reserved unsafe.Pointer) (ok uint8) {
+	r0, _, _ := syscall.SyscallN(procRtlDosPathNameToNtPathName_U.Addr(), uintptr(unsafe.Pointer(dosName)), uintptr(unsafe.Pointer(ntName)), uintptr(unsafe.Pointer(filePart)), uintptr(reserved))
+	ok = uint8(r0)
+	return
+}
+
+func RtlFreeUnicodeString(s *NTUnicodeString) {
+	syscall.SyscallN(procRtlFreeUnicodeString.Addr(), uintptr(unsafe.Pointer(s)))
+	return
+}
+
+func rtlGetNtVersionNumbers(majorVersion *uint32, minorVersion *uint32, buildNumber *uint32) {
+	syscall.SyscallN(procRtlGetNtVersionNumbers.Addr(), uintptr(unsafe.Pointer(majorVersion)), uintptr(unsafe.Pointer(minorVersion)), uintptr(unsafe.Pointer(buildNumber)))
 	return
 }
 

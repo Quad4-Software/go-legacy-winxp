@@ -10,7 +10,6 @@ SMOKE_OUT="$SHARED/smoke.out"
 SMOKE_EXIT="$SHARED/smoke.exit"
 SMOKE_LOG="$SHARED/smoke.log"
 SMOKE_REPORT="$SHARED/smoke-report.txt"
-COMPOSE=(docker compose -f "$XP_DIR/docker-compose.yml")
 
 show_smoke_artifacts() {
   if [[ -f "$SMOKE_LOG" ]]; then
@@ -212,10 +211,25 @@ detect_xp_kvm() {
   export XP_KVM
 }
 
-if ! docker info >/dev/null 2>&1; then
-  echo "docker is not available or not permitted for this user" >&2
+# Pick a container runtime. CONTAINER_RUNTIME=docker|podman overrides the
+# auto-detection, which prefers docker when it is usable.
+RUNTIME="${CONTAINER_RUNTIME:-}"
+if [[ -z "$RUNTIME" ]]; then
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    RUNTIME=docker
+  elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+    RUNTIME=podman
+  else
+    echo "neither docker nor podman is available or permitted for this user" >&2
+    exit 1
+  fi
+fi
+if ! "$RUNTIME" info >/dev/null 2>&1; then
+  echo "$RUNTIME is not available or not permitted for this user" >&2
   exit 1
 fi
+COMPOSE=("$RUNTIME" compose -f "$XP_DIR/docker-compose.yml")
+echo "container runtime: $RUNTIME"
 
 detect_xp_kvm
 
@@ -254,13 +268,30 @@ echo "first boot downloads and installs XP then runs docker/xp/oem/install.bat"
 echo "accelerator XP_KVM=${XP_KVM}"
 "${COMPOSE[@]}" up -d --build
 
+compose_down() {
+  if [[ "$RUNTIME" == "podman" ]]; then
+    "${COMPOSE[@]}" down >/dev/null 2>&1 || podman rm -f go-legacy-winxp-test >/dev/null 2>&1 || true
+  else
+    "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
+  fi
+}
+
+compose_logs() {
+  local n="$1"
+  if [[ "$RUNTIME" == "podman" ]]; then
+    podman logs --tail "$n" go-legacy-winxp-test 2>&1 | tail -n "$n" || true
+  else
+    "${COMPOSE[@]}" logs --no-color | tail -n "$n" || true
+  fi
+}
+
 cleanup() {
   local code="$1"
   if [[ "${XP_KEEP:-}" == "1" || "$code" -eq 0 ]]; then
     echo "leaving guest running, UI at http://127.0.0.1:8006/"
     return
   fi
-  "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
+  compose_down
 }
 trap 'cleanup $?' EXIT
 
@@ -281,11 +312,11 @@ while (( SECONDS < deadline )); do
             exit 0
           fi
           echo "Windows XP Docker smoke test failed: output validation" >&2
-          "${COMPOSE[@]}" logs --no-color | tail -n 80 >&2 || true
+          compose_logs 80 >&2
           exit 1
         fi
         echo "Windows XP Docker smoke test failed" >&2
-        "${COMPOSE[@]}" logs --no-color | tail -n 80 >&2 || true
+        compose_logs 80 >&2
         exit 1
         ;;
       *)
@@ -299,5 +330,5 @@ done
 echo "timed out waiting for XP smoke result" >&2
 write_smoke_report "TIMEOUT"
 show_smoke_artifacts
-"${COMPOSE[@]}" logs --no-color | tail -n 120 >&2 || true
+compose_logs 120 >&2
 exit 1

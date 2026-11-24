@@ -3477,6 +3477,24 @@ func testRequestHeaderValueCountLimit(t *testing.T, mode testMode) {
 			},
 			wantStatus: 431,
 		},
+		{
+			// Comma separated Trailer values are counted as multiple, because
+			// each value becomes its own field / a key in Request.Trailer.
+			// This is different from TestRequestTrailerHeaderValueCountLimit
+			// which tests the actual sending of the trailer, this just tests
+			// the Trailer header declaration.
+			name:  "comma separated trailer values count as multiple",
+			limit: 15,
+			setup: func(req *Request) {
+				req.Body = NoBody
+				req.TransferEncoding = []string{"chunked"}
+				req.Trailer = make(Header)
+				for i := range 16 {
+					req.Trailer[fmt.Sprintf("X-Trailer-%d", i)] = nil
+				}
+			},
+			wantStatus: 431,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -7490,6 +7508,33 @@ func testMaxBytesHandler(t *testing.T, mode testMode, maxSize, requestSize int64
 	})
 }
 
+func TestServerMaxBytesHeaderRace(t *testing.T) {
+	runSynctest(t, func(t *testing.T, mode testMode) {
+		cst := newClientServerTest(t, mode, MaxBytesHandler(HandlerFunc(func(w ResponseWriter, r *Request) {
+			var wg sync.WaitGroup
+			defer wg.Wait()
+			// MaxBytesHandler will hit its set limit when reading the request
+			// body. When this happens, it will make sure that the connection
+			// is closed after this response. In doing so, it will set
+			// "Connection: close" header. This must not race with any header
+			// that is explicitly set by the handler.
+			wg.Go(func() {
+				io.ReadAll(r.Body)
+			})
+			w.Header().Set("X-Test", "1")
+			w.WriteHeader(413)
+		}), 4), optFakeNet)
+		res, err := cst.c.Post(cst.ts.URL, "text/plain", strings.NewReader("hello"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 413 {
+			t.Errorf("want status 413, got %v", res.Status)
+		}
+	})
+}
+
 func TestEarlyHints(t *testing.T) {
 	ht := newHandlerTest(HandlerFunc(func(w ResponseWriter, r *Request) {
 		h := w.Header()
@@ -8176,6 +8221,101 @@ func TestServerRequestBodyCloseAfterPartialRead(t *testing.T) {
 		}
 		if err := <-closeErr; err != nil {
 			t.Errorf("Request.Body.Close() = %v, want nil", err)
+		}
+	})
+}
+
+func TestServerCONNECTSuccess(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const code = 200
+		body := []byte("body")
+		srv := &Server{
+			Handler: HandlerFunc(func(w ResponseWriter, req *Request) {
+				w.WriteHeader(code)
+				w.Write(body)
+			}),
+		}
+		l := fakeNetListen()
+		defer l.Close()
+		go srv.Serve(l)
+
+		conn := l.connect()
+		defer conn.Close()
+		io.WriteString(conn, "CONNECT backend.example.tld:80 HTTP/1.1\r\nHost: example.tld\r\n\r\n")
+
+		bufr := bufio.NewReader(conn)
+		synctest.Wait()
+		resp, err := ReadResponse(bufr, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != code {
+			t.Errorf("response status = %v, want %v", resp.StatusCode, code)
+		}
+		if resp.ContentLength != -1 {
+			t.Errorf("Content-Length: %v; want absent", resp.ContentLength)
+		}
+		if len(resp.TransferEncoding) > 0 {
+			t.Errorf("Transfer-Encoding: %q; want absent", resp.TransferEncoding)
+		}
+		for _, h := range []string{"Content-Length", "Transfer-Encoding"} {
+			if got, ok := resp.Header[h]; ok {
+				t.Errorf("response header %q = %q; want absent", h, got)
+			}
+		}
+		got := make([]byte, len(body))
+		if _, err := io.ReadFull(bufr, got); err != nil || !bytes.Equal(got, body) {
+			t.Fatalf("want bytes %q, got %q (err %v)", body, got, err)
+		}
+		if !conn.IsClosedByPeer() {
+			t.Errorf("connection not closed by peer")
+		}
+		if got, err := bufr.Peek(32); len(got) != 0 || err != io.EOF {
+			t.Errorf("read from conn: %q, %v; expect conn to be closed", got, err)
+		}
+	})
+}
+
+func TestServerCONNECTFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const code = 409
+		body := []byte("body")
+		srv := &Server{
+			Handler: HandlerFunc(func(w ResponseWriter, req *Request) {
+				w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+				w.WriteHeader(code)
+				w.Write(body)
+			}),
+		}
+		l := fakeNetListen()
+		defer l.Close()
+		go srv.Serve(l)
+
+		conn := l.connect()
+		defer conn.Close()
+		io.WriteString(conn, "CONNECT backend.example.tld:80 HTTP/1.1\r\nHost: example.tld\r\n\r\n")
+
+		bufr := bufio.NewReader(conn)
+		synctest.Wait()
+		resp, err := ReadResponse(bufr, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != code {
+			t.Errorf("response status = %v, want %v", resp.StatusCode, code)
+		}
+		if !resp.Close {
+			t.Errorf("Connection: close not set; want it to be")
+		}
+		got := make([]byte, len(body))
+		if _, err := io.ReadFull(bufr, got); err != nil || !bytes.Equal(got, body) {
+			t.Fatalf("want bytes %q, got %q (err %v)", body, got, err)
+		}
+		if !conn.IsClosedByPeer() {
+			t.Errorf("connection not closed by peer")
+		}
+		if got, err := bufr.Peek(32); len(got) != 0 || err != io.EOF {
+			t.Errorf("read from conn: %q, %v; expect conn to be closed", got, err)
 		}
 	})
 }

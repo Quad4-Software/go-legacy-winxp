@@ -15,5 +15,6 @@ var DecodeWTF16 = decodeWTF16
 
 var EnvSorted = envSorted
 
-var SystemDirectory = systemDirectory
-var LoadSystemDLLByPath = loadSystemDLLByPath
+var IsPipeName = isPipeName
+
+func SetTestHoldLinks(v bool) { testHoldLinks = v }

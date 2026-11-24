@@ -35,6 +35,11 @@ set EXITFILE=%SHARE%\smoke.exit
 set LOGFILE=%SHARE%\smoke.log
 echo starting > "%RESULT%"
 
+REM Launch the headless agent so scripts/xp-agent.sh can drive the guest.
+if exist "%SHARE%\xp-agent.exe" (
+  start "xp-agent" /min "%SHARE%\xp-agent.exe" "%SHARE%"
+)
+
 :run_tests
 if exist C:\OEM\reticulum-go-winxp.exe (
   C:\OEM\reticulum-go-winxp.exe --version > C:\OEM\reticulum.out 2>&1
