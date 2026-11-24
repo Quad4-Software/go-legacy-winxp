@@ -7,8 +7,10 @@ package x509
 import (
 	"bytes"
 	"errors"
+	"internal/syscall/windows"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -245,9 +247,21 @@ func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate
 	// These are returned in the LowerQualityChains field.
 	const CERT_CHAIN_RETURN_LOWER_QUALITY_CONTEXTS = 0x00000080
 
+	// CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL stops the chain engine from
+	// downloading missing certificates over the network. On Windows XP
+	// and Server 2003 a retrieval stalls inside crypt32 for tens of
+	// seconds, long enough to trip TLS handshake timeouts, and Go's
+	// verifier on other platforms never fetches at all.
+	const CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL = 0x00000004
+
+	flags := uint32(CERT_CHAIN_RETURN_LOWER_QUALITY_CONTEXTS)
+	if kernelSkipsChainURLFetch() {
+		flags |= CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL
+	}
+
 	// CertGetCertificateChain will traverse Windows's root stores in an attempt to build a verified certificate chain
 	var topCtx *syscall.CertChainContext
-	err = syscall.CertGetCertificateChain(syscall.Handle(0), storeCtx, verifyTime, storeCtx.Store, para, CERT_CHAIN_RETURN_LOWER_QUALITY_CONTEXTS, 0, &topCtx)
+	err = syscall.CertGetCertificateChain(syscall.Handle(0), storeCtx, verifyTime, storeCtx.Store, para, flags, 0, &topCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -280,3 +294,12 @@ func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate
 
 	return chains, nil
 }
+
+// kernelSkipsChainURLFetch reports whether the kernel is old enough that
+// the chain engine's certificate downloads stall badly enough to break
+// TLS. Windows XP and Server 2003 qualify; Vista and later retrieve in
+// reasonable time.
+var kernelSkipsChainURLFetch = sync.OnceValue(func() bool {
+	major, _, _ := windows.KernelVersion()
+	return major < 6
+})

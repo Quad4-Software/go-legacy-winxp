@@ -3,6 +3,7 @@
 src/cmd/link/internal/ld/pe.go
 src/cmd/link/internal/ld/ld_test.go
 src/cmd/vendor/golang.org/x/sys/windows/zsyscall_windows.go
+src/crypto/x509/root_windows.go
 src/internal/runtime/syscall/windows/defs_windows.go
 src/internal/syscall/windows/registry/zsyscall_windows.go
 src/internal/syscall/windows/syscall_windows.go
